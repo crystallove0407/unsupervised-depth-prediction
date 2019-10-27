@@ -101,11 +101,15 @@ def main():
         gt_depths = []
         pred_depths_resized = []
         for t_id in range(num_test):
+
+
             camera_id = cams[t_id]  # 2 is left, 3 is right
             # print("[%d] resize to %d %d" % (t_id, im_sizes[t_id][1], im_sizes[t_id][0]))
             pred_depth_resized = cv2.resize(pred_depths[t_id],
                                     (im_sizes[t_id][1], im_sizes[t_id][0]),
                                     interpolation=cv2.INTER_LINEAR)
+
+
             pred_depths_resized.append(pred_depth_resized)
             depth = generate_depth_map(gt_calib[t_id],
                                        gt_files[t_id],
@@ -115,12 +119,17 @@ def main():
                                        True)
             gt_depths.append(depth.astype(np.float32))
 
+
+
+
             filename = '_'.join(test_files[t_id].split('.')[0].split('/'))
             colored_map = normalize_depth_for_display(pred_depth_resized, cmap=CMAP)
             misc.imsave("%s/%s_pred_depth.png" % (depth_path, filename), colored_map)
 
-            im_file = imageio.imread(im_files[t_id])
-            imageio.imwrite('%s_input/%s.png' % (depth_path, filename), im_file)
+
+
+            # im_file = imageio.imread(im_files[t_id])
+            # imageio.imwrite('%s_input/%s.png' % (depth_path, filename), im_file)
         pred_depths = pred_depths_resized
     else:
         num_test = 200
@@ -138,6 +147,7 @@ def main():
     for i in range(num_test):
         gt_depth = gt_depths[i]
         pred_depth = np.copy(pred_depths[i])
+
 
         if args.split == 'eigen':
 
@@ -170,6 +180,8 @@ def main():
         pred_depth[pred_depth > args.max_depth] = args.max_depth
         abs_rel[i], sq_rel[i], rms[i], log_rms[i], a1[i], a2[i], a3[i] = \
             compute_errors(gt_depth[mask], pred_depth[mask])
+
+
 
     print("{:>10}, {:>10}, {:>10}, {:>10}, {:>10}, {:>10}, {:>10}".format('abs_rel', 'sq_rel', 'rms', 'log_rms', 'a1', 'a2', 'a3'))
     print("{:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}".format(abs_rel.mean(), sq_rel.mean(), rms.mean(), log_rms.mean(), a1.mean(), a2.mean(), a3.mean()))

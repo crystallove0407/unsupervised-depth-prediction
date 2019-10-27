@@ -18,11 +18,11 @@ WEIGHT_DECAY_KEY = 'WEIGHT_DECAY'
 
 
 def D_Net(dispnet_inputs, weight_reg=0.0004, is_training=True, reuse=False):
-    return build_resnet50(dispnet_inputs, get_disp_resnet50, is_training, 'depth_net', reuse=reuse)
+#     return build_resnet50(dispnet_inputs, get_disp_resnet50, is_training, 'depth_net', reuse=reuse)
     # return build_resnet18(dispnet_inputs, is_training, 'depth_net', reuse, weight_reg)
     # return build_vgg(dispnet_inputs, get_disp_vgg, is_training, 'depth_net', reuse, get_feature)
-    # D_Model = ShuffleNetV2(input_holder=dispnet_inputs, var_scope='depth_net', model_scale=1.0, shuffle_group=2, is_training=True)
-    # return D_Model.build_model()
+    D_Model = ShuffleNetV2(input_holder=dispnet_inputs, var_scope='depth_net', model_scale=1.0, shuffle_group=2, is_training=True)
+    return D_Model.build_model()
 
 ######################################
 # vgg
@@ -459,6 +459,10 @@ def resconv(x, num_layers, stride):
         shortcut = x
     return tf.nn.elu(conv3 + shortcut)
 
+def maxpool(x, kernel_size):
+    p = np.floor((kernel_size - 1) / 2).astype(np.int32)
+    p_x = tf.pad(x, [[0, 0], [p, p], [p, p], [0, 0]], mode='REFLECT')
+    return slim.max_pool2d(p_x, kernel_size)
 
 ######################################
 # ShuffleNetV2
@@ -519,38 +523,44 @@ class ShuffleNetV2():
 
                 with tf.variable_scope('decoding'):
                     # DECODING
-                    upconv6 = upconv(skip[5],   512, 3, 2) #H/32
+                    upconv6 = upconv_sep(skip[5],   512, 3, 2) #H/32
                     upconv6 = resize_like(upconv6, skip[4])
                     concat6 = tf.concat([upconv6, skip[4]], 3)
-                    iconv6  = conv(concat6,   512, 3, 1)
-
-                    upconv5 = upconv(iconv6, 256, 3, 2) #H/16
+#                     iconv6  = conv(concat6,   512, 3, 1)
+                    iconv6  = shufflenet_v2_block(concat6, 512, 3, stride=1, dilation=1, shuffle_group=2)
+                    
+                    upconv5 = upconv_sep(iconv6, 256, 3, 2) #H/16
                     upconv5 = resize_like(upconv5, skip[3])
                     concat5 = tf.concat([upconv5, skip[3]], 3)
-                    iconv5  = conv(concat5,   256, 3, 1)
+#                     iconv5  = conv(concat5,   256, 3, 1)
+                    iconv5  = shufflenet_v2_block(concat5, 256, 3, stride=1, dilation=1, shuffle_group=2)
 
-                    upconv4 = upconv(iconv5,  128, 3, 2) #H/8
+                    upconv4 = upconv_sep(iconv5,  128, 3, 2) #H/8
                     upconv4 = resize_like(upconv4, skip[2])
                     concat4 = tf.concat([upconv4, skip[2]], 3)
-                    iconv4  = conv(concat4,   128, 3, 1)
+#                     iconv4  = conv(concat4,   128, 3, 1)
+                    iconv4  = shufflenet_v2_block(concat4, 128, 3, stride=1, dilation=1, shuffle_group=2)
                     pred4 = get_pred(iconv4)
                     upred4  = upsample_nn(pred4, 2)
 
-                    upconv3 = upconv(iconv4,   64, 3, 2) #H/4
+                    upconv3 = upconv_sep(iconv4,   64, 3, 2) #H/4
                     concat3 = tf.concat([upconv3, skip[1], upred4], 3)
-                    iconv3  = conv(concat3,    64, 3, 1)
+#                     iconv3  = conv(concat3,    64, 3, 1)
+                    iconv3  = shufflenet_v2_block(concat3, 64, 3, stride=1, dilation=1, shuffle_group=2)
                     pred3 = get_pred(iconv3)
                     upred3  = upsample_nn(pred3, 2)
 
-                    upconv2 = upconv(iconv3,   32, 3, 2) #H/2
+                    upconv2 = upconv_sep(iconv3,   32, 3, 2) #H/2
                     concat2 = tf.concat([upconv2, skip[0], upred3], 3)
-                    iconv2  = conv(concat2,    32, 3, 1)
+#                     iconv2  = conv(concat2,    32, 3, 1)
+                    iconv2  = shufflenet_v2_block(concat2, 32, 3, stride=1, dilation=1, shuffle_group=2)
                     pred2 = get_pred(iconv2)
                     upred2  = upsample_nn(pred2, 2)
 
-                    upconv1 = upconv(iconv2,  16, 3, 2) #H
+                    upconv1 = upconv_sep(iconv2,  16, 3, 2) #H
                     concat1 = tf.concat([upconv1, upred2], 3)
-                    iconv1  = conv(concat1,   16, 3, 1)
+#                     iconv1  = conv(concat1,   16, 3, 1)
+                    iconv1  = shufflenet_v2_block(concat1, 16, 3, stride=1, dilation=1, shuffle_group=2)
                     pred1 = get_pred(iconv1)
 
                     return [pred1, pred2, pred3, pred4], skip[5]
@@ -628,7 +638,7 @@ def se_unit(x, bottleneck=2):
 
 def shufflenet_v2_block(x, out_channel, kernel_size, stride=1, dilation=1, shuffle_group=2):
     with tf.variable_scope(None, 'shuffle_v2_block'):
-        if stride == 1:
+        if stride == 1 and x.shape[-1] == out_channel:
             top, bottom = tf.split(x, num_or_size_splits=2, axis=3)
 
             half_channel = out_channel // 2
@@ -651,35 +661,8 @@ def shufflenet_v2_block(x, out_channel, kernel_size, stride=1, dilation=1, shuff
 
             out = tf.concat([b0, b1], axis=3)
             out = shuffle_unit(out, shuffle_group)
+       
         return out
-    
-
-def resize_like(inputs, ref):
-    iH, iW = inputs.get_shape()[1], inputs.get_shape()[2]
-    rH, rW = ref.get_shape()[1], ref.get_shape()[2]
-    if iH == rH and iW == rW:
-        return inputs
-    return tf.image.resize_nearest_neighbor(inputs, [rH.value, rW.value])
-
-def upconv(x, num_out_layers, kernel_size, scale):
-    upsample = upsample_nn(x, scale)
-    cnv = conv(upsample, num_out_layers, kernel_size, 1)
-    return cnv
-
-def upsample_nn(x, ratio):
-    h = x.get_shape()[1].value
-    w = x.get_shape()[2].value
-    return tf.image.resize_nearest_neighbor(x, [h * ratio, w * ratio])
-
-def conv(x, num_out_layers, kernel_size, stride, activation_fn=tf.nn.elu, normalizer_fn=slim.batch_norm):
-    p = np.floor((kernel_size - 1) / 2).astype(np.int32)
-    p_x = tf.pad(x, [[0, 0], [p, p], [p, p], [0, 0]], mode='REFLECT')
-    return slim.conv2d(p_x, num_out_layers, kernel_size, stride, 'VALID', activation_fn=activation_fn, normalizer_fn=normalizer_fn)
-
-def maxpool(x, kernel_size):
-    p = np.floor((kernel_size - 1) / 2).astype(np.int32)
-    p_x = tf.pad(x, [[0, 0], [p, p], [p, p], [0, 0]], mode='REFLECT')
-    return slim.max_pool2d(p_x, kernel_size)
 
 def get_pred(x):
     disp = 5 * conv(x, 1, 3, 1, activation_fn=tf.nn.sigmoid, normalizer_fn=None) + 0.01
@@ -689,6 +672,12 @@ def get_pred(x):
 # other utils
 ######################################
 
+def conv(x, num_out_layers, kernel_size, stride, activation_fn=tf.nn.elu, normalizer_fn=slim.batch_norm):
+    p = np.floor((kernel_size - 1) / 2).astype(np.int32)
+    p_x = tf.pad(x, [[0, 0], [p, p], [p, p], [0, 0]], mode='REFLECT')
+    return slim.conv2d(p_x, num_out_layers, kernel_size, stride, 'VALID', activation_fn=activation_fn, normalizer_fn=normalizer_fn)
+
+
 def resize_like(inputs, ref):
     iH, iW = inputs.get_shape()[1], inputs.get_shape()[2]
     rH, rW = ref.get_shape()[1], ref.get_shape()[2]
@@ -696,25 +685,21 @@ def resize_like(inputs, ref):
         return inputs
     return tf.image.resize_nearest_neighbor(inputs, [rH.value, rW.value])
 
+
 def upconv(x, num_out_layers, kernel_size, scale):
     upsample = upsample_nn(x, scale)
     cnv = conv(upsample, num_out_layers, kernel_size, 1)
+    return cnv
+
+def upconv_sep(x, num_out_layers, kernel_size, scale):
+    upsample = upsample_nn(x, scale)
+#     cnv = conv(upsample, num_out_layers, kernel_size, 1)
+    cnv  = shufflenet_v2_block(upsample, num_out_layers, kernel_size, stride=1, dilation=1, shuffle_group=2)
     return cnv
 
 def upsample_nn(x, ratio):
     h = x.get_shape()[1].value
     w = x.get_shape()[2].value
     return tf.image.resize_nearest_neighbor(x, [h * ratio, w * ratio])
-
-def conv(x, num_out_layers, kernel_size, stride, activation_fn=tf.nn.elu, normalizer_fn=slim.batch_norm):
-    p = np.floor((kernel_size - 1) / 2).astype(np.int32)
-    p_x = tf.pad(x, [[0, 0], [p, p], [p, p], [0, 0]], mode='REFLECT')
-    return slim.conv2d(p_x, num_out_layers, kernel_size, stride, 'VALID', activation_fn=activation_fn, normalizer_fn=normalizer_fn)
-
-def maxpool(x, kernel_size):
-    p = np.floor((kernel_size - 1) / 2).astype(np.int32)
-    p_x = tf.pad(x, [[0, 0], [p, p], [p, p], [0, 0]], mode='REFLECT')
-    return slim.max_pool2d(p_x, kernel_size)
-
 
 

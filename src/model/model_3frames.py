@@ -356,7 +356,8 @@ class Model(object):
                 occlusion_map_5_all = occu_masks_fw[2][s]
 
         self.losses = self.flow_reconstruction_weight * ((1.0 - self.ssim_weight) * \
-                      (reconstructed_loss + self.flow_cross_geometry_weight*cross_reconstructed_loss) + self.ssim_weight*(ssim_loss+self.flow_cross_geometry_weight*cross_ssim_loss)) + \
+                      (reconstructed_loss + self.flow_cross_geometry_weight*cross_reconstructed_loss) + \
+                        self.ssim_weight*(ssim_loss+self.flow_cross_geometry_weight*cross_ssim_loss)) + \
                       self.flow_smooth_weight * (flow_smooth_loss + self.flow_cross_geometry_weight*cross_flow_smooth_loss)
 
         summaries = []
@@ -372,7 +373,8 @@ class Model(object):
         tf.summary.image('scale%d_target_image' % s, tf.image.convert_image_dtype(curr_tgt_image_all[0], dtype=tf.uint8))
 
         for i in range(self.num_source):
-            tf.summary.image('scale%d_src_image_%d' % (s, i), tf.image.convert_image_dtype(curr_src_image_stack_all[0][:, :, :, i*3:(i+1)*3], dtype=tf.uint8))
+            tf.summary.image('scale%d_src_image_%d' % (s, i), \
+                            tf.image.convert_image_dtype(curr_src_image_stack_all[0][:, :, :, i*3:(i+1)*3], dtype=tf.uint8))
 
         tf.summary.image('scale%d_flow_src02tgt' % s, fl.flow_to_color(self.pred_fw_flows[0][s], max_flow=256))
         tf.summary.image('scale%d_flow_tgt2src1' % s, fl.flow_to_color(self.pred_fw_flows[1][s], max_flow=256))
