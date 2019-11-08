@@ -4,7 +4,7 @@ from __future__ import division
 import numpy as np
 from glob import glob
 import os
-import scipy.misc
+from PIL import Image
 
 class kitti_raw_loader(object):
     def __init__(self,
@@ -26,6 +26,7 @@ class kitti_raw_loader(object):
         self.cam_ids = ['02', '03']
         self.date_list = ['2011_09_26', '2011_09_28', '2011_09_29',
                           '2011_09_30', '2011_10_03']
+
         if remove_static:
             static_frames_file = dir_path + '/static_frames.txt'
             self.collect_static_frames(static_frames_file)
@@ -58,6 +59,9 @@ class kitti_raw_loader(object):
                         for n in range(N):
                             frame_id = '%.10d' % n
                             all_frames.append(dr + ' ' + cam + ' ' + frame_id)
+
+
+        
 
         if remove_static:
             for s in self.static_frames:
@@ -96,10 +100,11 @@ class kitti_raw_loader(object):
             curr_idx = tgt_idx + o
             curr_drive, curr_cid, curr_frame_id = frames[curr_idx].split(' ')
             curr_img = self.load_image_raw(curr_drive, curr_cid, curr_frame_id)
+            width, height = curr_img.size
             if o == 0:
-                zoom_y = self.img_height/curr_img.shape[0]
-                zoom_x = self.img_width/curr_img.shape[1]
-            curr_img = scipy.misc.imresize(curr_img, (self.img_height, self.img_width))
+                zoom_y = self.img_height/height #curr_img.shape[0]
+                zoom_x = self.img_width/width #curr_img.shape[1]
+            curr_img = curr_img.resize((self.img_width, self.img_height), Image.ANTIALIAS)
             image_seq.append(curr_img)
         return image_seq, zoom_x, zoom_y
 
@@ -118,7 +123,7 @@ class kitti_raw_loader(object):
     def load_image_raw(self, drive, cid, frame_id):
         date = drive[:10]
         img_file = os.path.join(self.dataset_dir, date, drive, 'image_' + cid, 'data', frame_id + '.png')
-        img = scipy.misc.imread(img_file)
+        img = Image.open(img_file)
         return img
 
     def load_intrinsics_raw(self, drive, cid, frame_id):

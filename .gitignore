@@ -5,3 +5,5 @@ results
 datasets
 
 __pycache__
+
+core.*

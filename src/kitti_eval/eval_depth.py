@@ -124,9 +124,14 @@ def main():
 
             filename = '_'.join(test_files[t_id].split('.')[0].split('/'))
             colored_map = normalize_depth_for_display(pred_depth_resized, cmap=CMAP)
-            misc.imsave("%s/%s_pred_depth.png" % (depth_path, filename), colored_map)
-
-
+#             misc.imsave("%s/%s_pred_depth.png" % (depth_path, filename), colored_map)
+            colored_map = (colored_map*255)[:, :, ::-1]
+            cv2.imwrite("%s/%s_pred_depth.png" % (depth_path, filename), colored_map)
+#             print(colored_map.shape)
+#             im = colored_map.swapaxes(0, 1)
+#             im = Image.fromarray((im*255).astype(np.uint8))
+#             im.save("%s/%s_pred_depth.png" % (depth_path, filename))
+            
 
             # im_file = imageio.imread(im_files[t_id])
             # imageio.imwrite('%s_input/%s.png' % (depth_path, filename), im_file)

@@ -274,7 +274,7 @@ class Undpflow(object):
 
             # Make training session.
             config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
-            config.gpu_options.per_process_gpu_memory_fraction = 0.8
+#             config.gpu_options.per_process_gpu_memory_fraction = 0.8
             sess = tf.Session(config=config)
 
             summary_writer = tf.summary.FileWriter(logdir='/'.join([self.summary_dir, 'train', self.model_name]),
