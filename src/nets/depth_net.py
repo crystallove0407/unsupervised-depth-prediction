@@ -710,7 +710,7 @@ def upsample_nn(x, ratio):
 
 
 ########################################################
-# MobileNetV2
+# ShuffleNetV2_mobile
 ########################################################
 class ShuffleNetV2_mobile():
 
@@ -779,28 +779,31 @@ class ShuffleNetV2_mobile():
                     x = out
                     for idx, channel in enumerate(self.output_channel_sizes):
                         x = upsample_nn(x, 2)
-                        x = dec_block(x, channel, scope='up_block_%d' % idx)
+                        x = dec_block(x, channel, scope='up_block_%d' % idx, depthType='sep')
                         
                         if idx != 4:
                             x = tf.concat([x, skip[3-idx]], 3)
                         if idx > 1:
                             x = tf.concat([x, upsample_nn(pred[idx-2], 2)], 3)
                             
-                        x = dec_block(x, channel, scope='block_%d' % idx)
+                        x = dec_block(x, channel, scope='block_%d' % idx, depthType='sep')
                         
                         if idx != 0:
                             pred.append(get_pred(x))
                         
+       
+        return pred[::-1], out
 
-                    return pred[::-1], out
 
-
-
-def dec_block(input_tensor, output_channel, scope = None):
+    
+def dec_block(input_tensor, output_channel, scope = None, depthType='sep'):
     with tf.variable_scope(scope, default_name='separable_conv'):
         input_tensor = tf.identity(input_tensor, name='input')
         net = input_tensor
-        depthwise_func = functools.partial(slim.separable_conv2d,
+        
+        #define depthwise function
+        if depthType == 'sep':
+            depthwise_func = functools.partial(slim.separable_conv2d,
                                                 num_outputs=None,
                                                 kernel_size=3,
                                                 depth_multiplier=1,
@@ -809,9 +812,43 @@ def dec_block(input_tensor, output_channel, scope = None):
                                                 normalizer_fn=None,
                                                 padding='SAME',
                                                 scope='depthwise')
-
+        elif depthType == 'dep':
+            depthwise_func = functools.partial(dwise_conv, k_h=3, k_w=3, channel_multiplier= 1, strides=[1,1,1,1],
+                                                   padding='SAME', stddev=0.02, name='dwise_conv')
+        elif depthType == 'combine':
+            depthwise_func = functools.partial(dwise_combine, name='dwise_combine')
+        
+        
+        # main block
         net = slim.conv2d(net, 6*output_channel, 1)
         net = depthwise_func(net)
         net = slim.conv2d(net, output_channel, 1, activation_fn=None)
 
+    
         return tf.identity(net, name='output')
+    
+def dwise_conv(input, k_h=3, k_w=3, channel_multiplier= 1, strides=[1,1,1,1],
+               padding='SAME', stddev=0.02, name='dwise_conv'):
+    with tf.variable_scope(name):
+        in_channel=input.get_shape().as_list()[-1]
+        w = tf.get_variable('w', [k_h, k_w, in_channel, channel_multiplier], dtype=tf.float32, 
+                        initializer=tf.truncated_normal_initializer(stddev=stddev))
+        conv = tf.nn.depthwise_conv2d(input, w, strides, padding, rate=None,name=None,data_format=None)
+
+    return conv
+
+def dwise_combine(input, name='dwise_combine'):
+    with tf.variable_scope(name):
+        n, h, w, c = input.get_shape().as_list()
+        if (c >= 512) or (c < 512 and h < 128):
+            return dwise_conv(input)
+        else:
+            return slim.separable_conv2d(input, 
+                                        num_outputs=None,
+                                        kernel_size=3,
+                                        depth_multiplier=1,
+                                        stride=1,
+                                        rate=1,
+                                        normalizer_fn=None,
+                                        padding='SAME',
+                                        scope='depthwise')
