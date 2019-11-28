@@ -46,7 +46,7 @@ class Model(object):
 
         self.compute_minimum_loss = False
         self.is_depth_upsampling = False # [!!!!] Cannot work. => cause depth smoothness loss to be 0
-        self.joint_encoder = False
+        self.joint_encoder = True
         self.equal_weighting = False  # equal weight for depth smoothness loss
         self.depth_normalization = False # depth normalization for depth smoothness loss
         self.scale_normalize = True # depth normalization for all loss
