@@ -41,31 +41,30 @@ class Model(object):
         self.flow_cross_geometry_weight = 0.3
 
         self.dp_reconstruction_weight = 50.0
-        self.dp_smooth_weight = 10.0 # origin 1.0
+        self.dp_smooth_weight = 1.0
         self.dp_cross_geometry_weight = 0.8
 
         self.compute_minimum_loss = False
         self.is_depth_upsampling = False # [!!!!] Cannot work. => cause depth smoothness loss to be 0
-        self.joint_encoder = False
+        self.joint_encoder = True
         self.equal_weighting = False  # equal weight for depth smoothness loss
         self.depth_normalization = False # depth normalization for depth smoothness loss
         self.scale_normalize = True # depth normalization for all loss
 
-        self.build(scale_normalize=self.scale_normalize, scope=scope, reuse_scope=reuse_scope)
+        self.build_model(scale_normalize=self.scale_normalize, scope=scope, reuse_scope=reuse_scope)
+        self.build_losses()
 
 
     ##################################
     # __init__
     ##################################
-    def build(self, scale_normalize=True, fix_pose=False, scope=None, reuse_scope=False):
+    def build_model(self, scale_normalize=True, fix_pose=False, scope=None, reuse_scope=False):
         if self.mode == 'train_flow':
-            self.build_flow_model(scope=scope, reuse_scope=reuse_scope)
-            self.build_flow_loss()
+            self.build_flow_model_final(scope=scope, reuse_scope=reuse_scope)
         elif self.mode == 'train_dp':
-            self.build_dp_model(scale_normalize=scale_normalize, scope=scope, reuse_scope=reuse_scope)
-            self.build_dp_loss()
+            self.build_dp_model_final(scale_normalize=scale_normalize, scope=scope, reuse_scope=reuse_scope)
 
-    def build_flow_model(self, scope=None, reuse_scope=False):
+    def build_flow_model_final(self, scope=None, reuse_scope=False):
         print("[Info] Building flow network ...")
         print("[Info] img_height:", self.img_height, "img_width", self.img_width)
 
@@ -86,7 +85,7 @@ class Model(object):
         self.pred_fw_flows = [flow_fw0, flow_fw1, flow_fw2]
         self.pred_bw_flows = [flow_bw0, flow_bw1, flow_bw2]
 
-    def build_dp_model(self, scale_normalize=True, scope=None, reuse_scope=False):
+    def build_dp_model_final(self, scale_normalize=True, scope=None, reuse_scope=False):
         print("[Info] Building depth and pose network ...")
         print("[Info] img_height:", self.img_height, "img_width", self.img_width)
 
@@ -94,13 +93,6 @@ class Model(object):
         self.depth = {}
         self.depth_upsampled = {}
         self.disp_bottleneck = {}
-
-        def spatial_normalize(self, disp):
-        # Credit: https://github.com/yzcjtr/GeoNet/blob/master/geonet_model.py
-            _, curr_h, curr_w, curr_c = disp.get_shape().as_list()
-            disp_mean = tf.reduce_mean(disp, axis=[1,2,3], keepdims=True)
-            disp_mean = tf.tile(disp_mean, [1, curr_h, curr_w, curr_c])
-            return disp/disp_mean
 
         with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
             tgt_pred_disp, tgt_disp_bottlenecks = D_Net(self.tgt_image_norm, weight_reg=self.weight_reg, is_training=True, reuse=False)
@@ -154,12 +146,65 @@ class Model(object):
             flow_bw1 = construct_model_pwc_full(self.src_image_stack_norm[:,:,:,3:6], self.tgt_image_norm, feature_src1_flow, feature_tgt_flow)
             flow_bw2 = construct_model_pwc_full(self.src_image_stack_norm[:,:,:,3:6], self.src_image_stack_norm[:,:,:,0:3], feature_src1_flow, feature_src0_flow)
 
-            self.pred_fw_flows = [flow_fw0, flow_fw1, flow_fw2] #0->1 0->2 1->2
-            self.pred_bw_flows = [flow_bw0, flow_bw1, flow_bw2] #1->0 2->1 2->0
+            self.pred_fw_flows = [flow_fw0, flow_fw1, flow_fw2]
+            self.pred_bw_flows = [flow_bw0, flow_bw1, flow_bw2]
 
+    # useless
+    def build_dpflow_model2(self, scale_normalize=True, fix_pose=False, scope=None, reuse_scope=None):
+        print("[Info] Building depth & pose & flow network ...")
+
+        with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+            self.tgt_pred_disp, self.tgt_disp_bottlenecks = D_Net(self.tgt_image, is_training=True, reuse=False)
+            if scale_normalize:
+                # As proposed in https://arxiv.org/abs/1712.00175, this can
+                # bring improvement in depth estimation, but not included in our paper.
+                self.tgt_pred_disp = [self.spatial_normalize(disp) for disp in self.tgt_pred_disp]
+            self.tgt_pred_depth = [1./d for d in self.tgt_pred_disp]
+
+            self.src_pred_disps = []
+            self.src_pred_depths = []
+            self.src_disp_bottlenecks = []
+            for i in range(self.num_source):
+                temp_disp, temp_disp_bottlenecks = D_Net(self.src_image_stack[:,:,:,3*i:3*(i+1)], is_training=True, reuse=True)
+                if scale_normalize:
+                    temp_disp = [self.spatial_normalize(disp) for disp in temp_disp]
+                self.src_pred_disps.append(temp_disp)
+                self.src_pred_depths.append([1./d for d in temp_disp])
+                self.src_disp_bottlenecks.append(temp_disp_bottlenecks)
+
+            self.pred_poses = P_Net(self.tgt_image, self.src_image_stack, is_training=True)
+            # pose_inputs = tf.concat([self.tgt_feature, self.src_feature[0], self.src_feature[1]], axis=3)
+            # self.pred_poses, _ = pose_net_2(pose_inputs, is_training=True, reuse=False)
+            if fix_pose:
+                self.pred_poses = tf.stop_gradient(self.pred_poses)
+
+            with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+                feature_tgt_flow = feature_pyramid_flow(self.tgt_image, reuse=False)
+                feature_src0_flow = feature_pyramid_flow(self.src_image_stack[:,:,:,0:3], reuse=True)
+                feature_src1_flow = feature_pyramid_flow(self.src_image_stack[:,:,:,3:6], reuse=True)
+
+                flow_fw0 = construct_model_pwc_full(self.src_image_stack[:,:,:,0:3], self.tgt_image, feature_src0_flow, feature_tgt_flow)
+                flow_fw1 = construct_model_pwc_full(self.tgt_image, self.src_image_stack[:,:,:,3:6], feature_tgt_flow, feature_src1_flow)
+                flow_fw2 = construct_model_pwc_full(self.src_image_stack[:,:,:,0:3], self.src_image_stack[:,:,:,3:6], feature_src0_flow, feature_src1_flow)
+
+                flow_bw0 = construct_model_pwc_full(self.tgt_image, self.src_image_stack[:,:,:,0:3], feature_tgt_flow, feature_src0_flow)
+                flow_bw1 = construct_model_pwc_full(self.src_image_stack[:,:,:,3:6], self.tgt_image, feature_src1_flow, feature_tgt_flow)
+                flow_bw2 = construct_model_pwc_full(self.src_image_stack[:,:,:,3:6], self.src_image_stack[:,:,:,0:3], feature_src1_flow, feature_src0_flow)
+
+            self.pred_flows = [flow_fw0, flow_bw0, flow_bw1, flow_fw1, flow_fw2, flow_bw2]
+
+
+    ##################################
+    # __init__
+    ##################################
+    def build_losses(self):
+        if self.mode == 'train_flow':
+            self.build_flow_loss_final()
+        elif self.mode == 'train_dp':
+            self.build_dp_loss_mask_allpose()
     
     # in build_losses()
-    def build_flow_loss(self):
+    def build_flow_loss_final(self):
         reconstructed_loss = 0
         cross_reconstructed_loss = 0
         flow_smooth_loss = 0
@@ -348,7 +393,7 @@ class Model(object):
         self.summ_op = tf.summary.merge(summaries)
 
     # in build_losses() 
-    def build_dp_loss(self):
+    def build_dp_loss_mask_allpose(self):
         """
         For each pair, we predict two camera poses (1->2, 2->1)
 
@@ -594,7 +639,20 @@ class Model(object):
 
         self.summ_op = tf.summary.merge(summaries)
 
-    # in build_flow_loss() & build_dp_loss()
+
+    ##################################
+    # others
+    ##################################
+
+    # in build_dp_model_final() & build_dpflow_model2()
+    def spatial_normalize(self, disp):
+        # Credit: https://github.com/yzcjtr/GeoNet/blob/master/geonet_model.py
+        _, curr_h, curr_w, curr_c = disp.get_shape().as_list()
+        disp_mean = tf.reduce_mean(disp, axis=[1,2,3], keepdims=True)
+        disp_mean = tf.tile(disp_mean, [1, curr_h, curr_w, curr_c])
+        return disp/disp_mean
+
+    # in build_flow_loss_final() & build_dp_loss_mask_allpose()
     def occulsion(self, pred_flow, H, W):
         """
         Here, we compute the soft occlusion maps proposed in https://arxiv.org/pdf/1711.05890.pdf

@@ -181,9 +181,10 @@ class Undpflow(object):
                 from model.model_5frames import Model
 
             with tf.variable_scope(tf.get_variable_scope()) as vs:
-                for i in xrange(self.num_gpus):
+                print('variable_scope(vs):', vs.name)
+                for i in xrange(self.num_gpus): #0 1
                     with tf.device('/gpu:%d' % i):
-                        if i == self.num_gpus - 1:
+                        if i == self.num_gpus - 1:  #1
                             scopename = "model"
                         else:
                             scopename = '%s_%d' % ("tower", i)
@@ -243,8 +244,12 @@ class Undpflow(object):
                                               scope=vs)
 
                             # Parameter Count
-                            parameter_count = tf.reduce_sum([tf.reduce_prod(tf.shape(v)) for v in var_train_list])
+                            param_total = tf.reduce_sum([tf.reduce_prod(tf.shape(v)) for v in var_train_list])
+                            param_depth = tf.reduce_sum([tf.reduce_prod(tf.shape(v)) for v in var_depth])
+                            param_pose = tf.reduce_sum([tf.reduce_prod(tf.shape(v)) for v in var_pose])
+                            param_flow = tf.reduce_sum([tf.reduce_prod(tf.shape(v)) for v in var_flow])
 
+                            # get loss
                             loss = model.losses
 
                             # Retain the summaries from the final tower.
@@ -283,7 +288,10 @@ class Undpflow(object):
             sess.run(tf.global_variables_initializer())
             sess.run(tf.local_variables_initializer())
 
-            print("[Info] Model size: {:.5f}M".format(sess.run(parameter_count)/1000000.0))
+            print("[Info] Model size:     {:.5f}M".format(sess.run(param_total)/1000000.0))
+            print("[Info] Depth net size: {:.5f}M".format(sess.run(param_depth)/1000000.0))
+            print("[Info] Pose net size:  {:.5f}M".format(sess.run(param_pose)/1000000.0))
+            print("[Info] Flow net size:  {:.5f}M".format(sess.run(param_flow)/1000000.0))
 
             if cont_model != None:
                 """ Continue training from a checkpoint """

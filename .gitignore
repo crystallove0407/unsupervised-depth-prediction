@@ -7,3 +7,5 @@ datasets
 __pycache__
 
 core.*
+
+.vscode
