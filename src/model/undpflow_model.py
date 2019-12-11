@@ -77,7 +77,7 @@ class Undpflow(object):
 
     def train(self, train_mode=None, retrain=False, cont_model=None, restore_flow_model=None):
         seed = 8964
-        tf.set_random_seed(seed)
+        tf.compat.v1.set_random_seed(seed)
         np.random.seed(seed)
         random.seed(seed)
 
@@ -86,8 +86,8 @@ class Undpflow(object):
         """ Step 1. Loading the training data """
         with tf.Graph().as_default(), tf.device('/cpu:0'):
             global_step = tf.Variable(0, name="global_step", trainable=False)
-            lr_decay = tf.train.exponential_decay(self.initial_learning_rate, global_step, decay_steps=self.decay_steps, decay_rate=self.decay_rate, staircase=True)
-            optim = tf.train.AdamOptimizer(lr_decay, self.beta1)
+            lr_decay = tf.compat.v1.train.exponential_decay(self.initial_learning_rate, global_step, decay_steps=self.decay_steps, decay_rate=self.decay_rate, staircase=True)
+            optim = tf.compat.v1.train.AdamOptimizer(lr_decay, self.beta1)
 
             tower_grads = []
 
@@ -170,7 +170,7 @@ class Undpflow(object):
                 split_pix2cam = tf.split(
                     axis=0, num_or_size_splits=self.num_gpus, value=self.proj_pix2cam) # K_inverse
 
-            summaries_cpu = tf.get_collection(tf.GraphKeys.SUMMARIES, tf.get_variable_scope().name)
+            summaries_cpu = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.SUMMARIES, tf.compat.v1.get_variable_scope().name)
 
             """ Step 2. Building model """
             if self.num_source == 2:
@@ -180,7 +180,7 @@ class Undpflow(object):
                 print("[!] Loading the model for 5 frames...")
                 from model.model_5frames import Model
 
-            with tf.variable_scope(tf.get_variable_scope()) as vs:
+            with tf.compat.v1.variable_scope(tf.compat.v1.get_variable_scope()) as vs:
                 print('variable_scope(vs):', vs.name)
                 for i in xrange(self.num_gpus): #0 1
                     with tf.device('/gpu:%d' % i):
@@ -189,7 +189,7 @@ class Undpflow(object):
                         else:
                             scopename = '%s_%d' % ("tower", i)
 
-                        with tf.name_scope(scopename) as ns:
+                        with tf.compat.v1.name_scope(scopename) as ns:
                             if i == 0:
                                 # Build models
                                 model = Model(split_tgt_image[i],
@@ -207,19 +207,19 @@ class Undpflow(object):
 
                                 var_pose = list(
                                     set(
-                                        tf.get_collection(
-                                            tf.GraphKeys.TRAINABLE_VARIABLES,
+                                        tf.compat.v1.get_collection(
+                                            tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES,
                                             scope=".*pose_net.*")))
                                 var_depth = list(
                                     set(
-                                        tf.get_collection(
-                                            tf.GraphKeys.TRAINABLE_VARIABLES,
+                                        tf.compat.v1.get_collection(
+                                            tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES,
                                             scope=".*(depth_net|feature_net_disp).*"
                                         )))
                                 var_flow = list(
                                     set(
-                                        tf.get_collection(
-                                            tf.GraphKeys.TRAINABLE_VARIABLES,
+                                        tf.compat.v1.get_collection(
+                                            tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES,
                                             scope=".*(flow_net|feature_net_flow).*"
                                         )))
 
@@ -244,17 +244,17 @@ class Undpflow(object):
                                               scope=vs)
 
                             # Parameter Count
-                            param_total = tf.reduce_sum([tf.reduce_prod(tf.shape(v)) for v in var_train_list])
-                            param_depth = tf.reduce_sum([tf.reduce_prod(tf.shape(v)) for v in var_depth])
-                            param_pose = tf.reduce_sum([tf.reduce_prod(tf.shape(v)) for v in var_pose])
-                            param_flow = tf.reduce_sum([tf.reduce_prod(tf.shape(v)) for v in var_flow])
+                            param_total = tf.reduce_sum(input_tensor=[tf.reduce_prod(input_tensor=tf.shape(input=v)) for v in var_train_list])
+                            param_depth = tf.reduce_sum(input_tensor=[tf.reduce_prod(input_tensor=tf.shape(input=v)) for v in var_depth])
+                            param_pose = tf.reduce_sum(input_tensor=[tf.reduce_prod(input_tensor=tf.shape(input=v)) for v in var_pose])
+                            param_flow = tf.reduce_sum(input_tensor=[tf.reduce_prod(input_tensor=tf.shape(input=v)) for v in var_flow])
 
                             # get loss
                             loss = model.losses
 
                             # Retain the summaries from the final tower.
                             if i == self.num_gpus - 1:
-                                summaries = tf.get_collection(tf.GraphKeys.SUMMARIES, ns)
+                                summaries = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.SUMMARIES, ns)
                                 # eval_model = Model_eval(scope=vs)
 
                             # Calculate the gradients for the batch of data on this CIFAR tower.
@@ -267,26 +267,26 @@ class Undpflow(object):
             # grads = [(tf.clip_by_norm(grad, 0.1), var) for grad, var in grads]
 
             # Apply the gradients to adjust the shared variables.
-            update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            update_ops = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.UPDATE_OPS)
             with tf.control_dependencies(update_ops):
                 apply_gradient_op = optim.apply_gradients(grads, global_step=global_step)
 
             # Create a saver.
-            saver = tf.train.Saver(max_to_keep=50)
+            saver = tf.compat.v1.train.Saver(max_to_keep=50)
 
             # Build the summary operation from the last tower summaries.
-            summary_op = tf.summary.merge(summaries + summaries_cpu)
+            summary_op = tf.compat.v1.summary.merge(summaries + summaries_cpu)
 
             # Make training session.
-            config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
+            config = tf.compat.v1.ConfigProto(allow_soft_placement=True, log_device_placement=False)
 #             config.gpu_options.per_process_gpu_memory_fraction = 0.8
-            sess = tf.Session(config=config)
+            sess = tf.compat.v1.Session(config=config)
 
-            summary_writer = tf.summary.FileWriter(logdir='/'.join([self.summary_dir, 'train', self.model_name]),
+            summary_writer = tf.compat.v1.summary.FileWriter(logdir='/'.join([self.summary_dir, 'train', self.model_name]),
                 graph=sess.graph, flush_secs=10)
 
-            sess.run(tf.global_variables_initializer())
-            sess.run(tf.local_variables_initializer())
+            sess.run(tf.compat.v1.global_variables_initializer())
+            sess.run(tf.compat.v1.local_variables_initializer())
 
             print("[Info] Model size:     {:.5f}M".format(sess.run(param_total)/1000000.0))
             print("[Info] Depth net size: {:.5f}M".format(sess.run(param_depth)/1000000.0))
@@ -296,25 +296,25 @@ class Undpflow(object):
             if cont_model != None:
                 """ Continue training from a checkpoint """
                 print("[Info] Continue training. Restoreing:", cont_model)
-                saver = tf.train.Saver(max_to_keep=10)
+                saver = tf.compat.v1.train.Saver(max_to_keep=10)
                 saver.restore(sess, cont_model)
             else:
                 if self.mode == 'train_dp':
                     print("[Info] Restoreing pretrained flow weights from:", restore_flow_model)
-                    saver_flow = tf.train.Saver(
-                        tf.get_collection(
-                            tf.GraphKeys.MODEL_VARIABLES,
+                    saver_flow = tf.compat.v1.train.Saver(
+                        tf.compat.v1.get_collection(
+                            tf.compat.v1.GraphKeys.MODEL_VARIABLES,
                             scope=".*(flow_net|feature_net_flow).*"),
                         max_to_keep=1)
                     saver_flow.restore(sess, restore_flow_model)
                 elif self.mode == 'train_all':
                     print("[Info] Restoreing:", restore_flow_model)
-                    saver_rest = tf.train.Saver(
+                    saver_rest = tf.compat.v1.train.Saver(
                         list(
-                            set(tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)) -
+                            set(tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.GLOBAL_VARIABLES)) -
                             set(
-                                tf.get_collection(
-                                    tf.GraphKeys.GLOBAL_VARIABLES,
+                                tf.compat.v1.get_collection(
+                                    tf.compat.v1.GraphKeys.GLOBAL_VARIABLES,
                                     scope=".*(Adam_1|Adam).*"))),
                         max_to_keep=1)
                     saver_rest.restore(sess, restore_flow_model)
@@ -323,7 +323,7 @@ class Undpflow(object):
                 sess.run(global_step.assign(0))
 
             start_itr = global_step.eval(session=sess)
-            tf.train.start_queue_runners(sess)
+            tf.compat.v1.train.start_queue_runners(sess)
 
             """ Step 3. Training """
             steps_per_epoch = loader.steps_per_epoch

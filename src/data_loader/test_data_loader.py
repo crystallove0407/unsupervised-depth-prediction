@@ -14,8 +14,8 @@ class BasicDataset(object):
         self.data_num = self.data_list.shape[0]
 
     def read_and_decode_depth_kitti(self, filename_queue):
-        img1_name = tf.string_join([self.img_dir, '/', filename_queue])
-        img1 = tf.image.decode_png(tf.read_file(img1_name), channels=3)
+        img1_name = tf.strings.join([self.img_dir, '/', filename_queue])
+        img1 = tf.image.decode_png(tf.io.read_file(img1_name), channels=3)
         img1 = tf.cast(img1, tf.float32)
         return img1
 
@@ -26,10 +26,11 @@ class BasicDataset(object):
         return img1
 
     def create_one_shot_iterator_depth_kitti(self, data_list, num_parallel_calls=4):
-        data_list = tf.convert_to_tensor(data_list, dtype=tf.string)
+        data_list = tf.convert_to_tensor(value=data_list, dtype=tf.string)
         dataset = tf.data.Dataset.from_tensor_slices(data_list)
-        dataset = dataset.map(self.preprocess_one_shot_depth_kitti, num_parallel_calls=num_parallel_calls)
-        dataset = dataset.apply(tf.contrib.data.batch_and_drop_remainder(1))
-
-        iterator = dataset.make_initializable_iterator()
+        dataset = dataset.map(
+            self.preprocess_one_shot_depth_kitti, num_parallel_calls=num_parallel_calls)
+        #dataset = dataset.apply(tf.contrib.data.batch_and_drop_remainder(1))
+        dataset = dataset.batch(1)
+        iterator = tf.compat.v1.data.make_initializable_iterator(dataset)
         return iterator

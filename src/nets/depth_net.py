@@ -49,11 +49,11 @@ class ShuffleNetV2():
     def build_model(self):
         '''Returns:
             pred[::-1], skip[-1]'''
-        with tf.variable_scope(self.var_scope) as sc:
+        with tf.compat.v1.variable_scope(self.var_scope) as sc:
             with slim.arg_scope([slim.batch_norm], is_training=self.is_training):
                 skip = []
-                with tf.variable_scope('encoder'):
-                    with tf.variable_scope('init_block'):
+                with tf.compat.v1.variable_scope('encoder'):
+                    with tf.compat.v1.variable_scope('init_block'):
                         out = conv_bn_relu(
                             self.input, self.first_conv_channel, 3, 2)
                         skip.append(out)
@@ -61,7 +61,7 @@ class ShuffleNetV2():
                         skip.append(out)
 
                     for idx, block in enumerate(self.channel_sizes[:-1]):
-                        with tf.variable_scope('shuffle_block_{}'.format(idx)):
+                        with tf.compat.v1.variable_scope('shuffle_block_{}'.format(idx)):
                             out_channel, repeat = block
 
                             # First block is downsampling
@@ -75,13 +75,13 @@ class ShuffleNetV2():
 
                             skip.append(out)
 
-                    with tf.variable_scope('end_block'):
+                    with tf.compat.v1.variable_scope('end_block'):
                         out = conv_bn_relu(out, self.channel_sizes[-1][0], 1)
 
                 for idx, sk in enumerate(skip):
                     print("skip[%d]:" % idx, sk.shape)
 
-                with tf.variable_scope('decoder'):
+                with tf.compat.v1.variable_scope('decoder'):
                     # DECODER
                     pred = []
                     x = out
@@ -110,7 +110,7 @@ def dec_block(input_tensor, output_channel, scope=None, decoderType='separable')
     call function: 
         slim.separable_conv2d, slim.conv2d, sufflenet_v2_block
     '''
-    with tf.variable_scope(scope, default_name='dec_block'):
+    with tf.compat.v1.variable_scope(scope, default_name='dec_block'):
         input_tensor = tf.identity(input_tensor, name='input')
         net = input_tensor
 
@@ -144,7 +144,7 @@ def dec_block(input_tensor, output_channel, scope=None, decoderType='separable')
 
 def shufflenetv2_block(x, out_channel, kernel_size, stride=1, dilation=1, shuffle_group=2):
     # call function: conv_bn_relu, depthwise_conv_bn, shuffle_unit
-    with tf.variable_scope(None, 'shuffle_v2_block'):
+    with tf.compat.v1.variable_scope(None, 'shuffle_v2_block'):
         half_channel = out_channel // 2
 
         # stride == 1
@@ -174,18 +174,18 @@ def shufflenetv2_block(x, out_channel, kernel_size, stride=1, dilation=1, shuffl
 
 
 def shuffle_unit(x, groups):
-    with tf.variable_scope(None, 'shuffle_unit'):
+    with tf.compat.v1.variable_scope(None, 'shuffle_unit'):
         n, h, w, c = x.get_shape().as_list()
         x = tf.reshape(x, shape=tf.convert_to_tensor(
-            [tf.shape(x)[0], h, w, groups, c // groups]))
-        x = tf.transpose(x, tf.convert_to_tensor([0, 1, 2, 4, 3]))
+            value=[tf.shape(input=x)[0], h, w, groups, c // groups]))
+        x = tf.transpose(a=x, perm=tf.convert_to_tensor(value=[0, 1, 2, 4, 3]))
         x = tf.reshape(x, shape=tf.convert_to_tensor(
-            [tf.shape(x)[0], h, w, c]))
+            value=[tf.shape(input=x)[0], h, w, c]))
     return x
 
 
 def conv_bn_relu(x, out_channel, kernel_size, stride=1, dilation=1, scope=None):
-    with tf.variable_scope('conv_bn_relu_'+scope, 'conv_bn_relu'):
+    with tf.compat.v1.variable_scope('conv_bn_relu_'+scope, 'conv_bn_relu'):
         x = slim.conv2d(x, out_channel, kernel_size, stride, rate=dilation,
                         biases_initializer=None, activation_fn=None)
         x = slim.batch_norm(x, activation_fn=tf.nn.relu, fused=False)
@@ -193,7 +193,7 @@ def conv_bn_relu(x, out_channel, kernel_size, stride=1, dilation=1, scope=None):
 
 
 def depthwise_conv_bn(x, kernel_size, stride=1, dilation=1):
-    with tf.variable_scope(None, 'depthwise_conv_bn'):
+    with tf.compat.v1.variable_scope(None, 'depthwise_conv_bn'):
         n, h, w, c = x.get_shape().as_list()
         x = slim.separable_conv2d(x, None, kernel_size, depth_multiplier=1, stride=stride,
                                   rate=dilation, activation_fn=None, biases_initializer=None)
@@ -203,7 +203,7 @@ def depthwise_conv_bn(x, kernel_size, stride=1, dilation=1):
 
 def get_pred(x):
     '''預測深度值範圍: 0.01 ~ 5, 太高loss 會爆炸'''
-    x = tf.pad(x, [[0, 0], [1, 1], [1, 1], [0, 0]], mode='REFLECT')
+    x = tf.pad(tensor=x, paddings=[[0, 0], [1, 1], [1, 1], [0, 0]], mode='REFLECT')
     x = slim.conv2d(x, 1, 3, 1, 'VALID', activation_fn=tf.nn.elu,
                     normalizer_fn=slim.batch_norm)
     disp = 5 * x + 0.01
@@ -212,4 +212,4 @@ def get_pred(x):
 
 def upsample(x, ratio):
     n, h, w, c = x.get_shape().as_list()
-    return tf.image.resize_nearest_neighbor(x, [h * ratio, w * ratio])
+    return tf.image.resize(x, [h * ratio, w * ratio], method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)

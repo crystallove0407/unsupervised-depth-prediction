@@ -45,17 +45,17 @@ class DataLoader(object):
 
         # Load the list of training files into queues
         file_list = self.format_file_list(self.dataset_dir, 'train', self.file_extension)
-        image_paths_queue = tf.train.string_input_producer(
+        image_paths_queue = tf.compat.v1.train.string_input_producer(
             file_list['image_file_list'], seed=seed,
             shuffle=self.shuffle,
             num_epochs=(1 if not self.shuffle else None))
-        cam_paths_queue = tf.train.string_input_producer(
+        cam_paths_queue = tf.compat.v1.train.string_input_producer(
             file_list['cam_file_list'], seed=seed,
             shuffle=self.shuffle,
             num_epochs=(1 if not self.shuffle else None))
 
         # Load images
-        img_reader = tf.WholeFileReader()
+        img_reader = tf.compat.v1.WholeFileReader()
         _, image_contents = img_reader.read(image_paths_queue)
         if self.file_extension == 'jpg':
             image_seq = tf.image.decode_jpeg(image_contents)
@@ -66,13 +66,13 @@ class DataLoader(object):
             tgt_image_o, src_image_stack_o = self.unpack_image_sequence(image_seq, self.img_height, self.img_width, self.num_source)
 
             if self.shuffle:
-                tgt_image_o, src_image_stack_o = tf.train.shuffle_batch(
+                tgt_image_o, src_image_stack_o = tf.compat.v1.train.shuffle_batch(
                     [tgt_image_o, src_image_stack_o],
                     batch_size=self.batch_size,
                     capacity=QUEUE_SIZE + QUEUE_BUFFER * self.batch_size,
                     min_after_dequeue=QUEUE_SIZE)
             else:
-                tgt_image_o, src_image_stack_o = tf.train.batch(
+                tgt_image_o, src_image_stack_o = tf.compat.v1.train.batch(
                     [tgt_image_o, src_image_stack_o],
                     batch_size=self.batch_size,
                     num_threads=1,
@@ -81,40 +81,40 @@ class DataLoader(object):
             return tgt_image_o, src_image_stack_o
         else:
             """ Data Loading and Augmentation for depth & pose """
-            with tf.name_scope('load_intrinsics'):
-                cam_reader = tf.TextLineReader()
+            with tf.compat.v1.name_scope('load_intrinsics'):
+                cam_reader = tf.compat.v1.TextLineReader()
                 _, raw_cam_contents = cam_reader.read(cam_paths_queue)
                 rec_def = []
                 for i in range(9):
                     rec_def.append([1.0])
-                raw_cam_vec = tf.decode_csv(raw_cam_contents, record_defaults=rec_def)
+                raw_cam_vec = tf.io.decode_csv(records=raw_cam_contents, record_defaults=rec_def)
                 raw_cam_vec = tf.stack(raw_cam_vec)
                 intrinsics = tf.reshape(raw_cam_vec, [3, 3])
 
-            with tf.name_scope('convert_image'):
+            with tf.compat.v1.name_scope('convert_image'):
                 image_seq = self.preprocess_image(image_seq)  # Converts to float.
 
             if self.random_color:
-                with tf.name_scope('image_augmentation'):
+                with tf.compat.v1.name_scope('image_augmentation'):
                     image_seq = self.augment_image_colorspace(image_seq)
 
             image_stack = self.unpack_images(image_seq)
 
             if self.flipping_mode != FLIP_NONE:
                 random_flipping = (self.flipping_mode == FLIP_RANDOM)
-                with tf.name_scope('image_augmentation_flip'):
+                with tf.compat.v1.name_scope('image_augmentation_flip'):
                     image_stack, intrinsics = self.augment_images_flip(
                         image_stack, intrinsics, randomized=random_flipping)
 
             if self.random_scale_crop:
-                with tf.name_scope('image_augmentation_scale_crop'):
+                with tf.compat.v1.name_scope('image_augmentation_scale_crop'):
                     image_stack, intrinsics = self.augment_images_scale_crop(
                         image_stack, intrinsics, self.img_height, self.img_width)
 
-            with tf.name_scope('multi_scale_intrinsics'):
+            with tf.compat.v1.name_scope('multi_scale_intrinsics'):
                 intrinsic_mat = self.get_multi_scale_intrinsics(intrinsics, self.num_scales)
                 intrinsic_mat.set_shape([self.num_scales, 3, 3])
-                intrinsic_mat_inv = tf.matrix_inverse(intrinsic_mat)
+                intrinsic_mat_inv = tf.linalg.inv(intrinsic_mat)
                 intrinsic_mat_inv.set_shape([self.num_scales, 3, 3])
 
             if self.imagenet_norm:
@@ -126,19 +126,19 @@ class DataLoader(object):
             else:
                 image_stack_norm = image_stack
 
-            with tf.name_scope('batching'):
+            with tf.compat.v1.name_scope('batching'):
                 min_after_dequeue = 2048
                 capacity = min_after_dequeue + 4 * self.batch_size
                 if self.shuffle:
                     logging.info("[Info] Shuffling the batch")
-                    (image_stack, image_stack_norm, intrinsic_mat, intrinsic_mat_inv) = tf.train.shuffle_batch(
+                    (image_stack, image_stack_norm, intrinsic_mat, intrinsic_mat_inv) = tf.compat.v1.train.shuffle_batch(
                         [image_stack, image_stack_norm, intrinsic_mat, intrinsic_mat_inv],
                         batch_size=self.batch_size,
                         capacity=capacity,
                         min_after_dequeue=min_after_dequeue,
                         num_threads=10)
                 else:
-                    (image_stack, image_stack_norm, intrinsic_mat, intrinsic_mat_inv) = tf.train.batch(
+                    (image_stack, image_stack_norm, intrinsic_mat, intrinsic_mat_inv) = tf.compat.v1.train.batch(
                         [image_stack, image_stack_norm, intrinsic_mat, intrinsic_mat_inv],
                         batch_size=self.batch_size,
                         num_threads=1,
@@ -161,12 +161,12 @@ class DataLoader(object):
         # Random scaling
         def random_scaling(im, intrinsics):
             batch_size, in_h, in_w, _ = im.get_shape().as_list()
-            scaling = tf.random_uniform([2], 1, 1.15)
+            scaling = tf.random.uniform([2], 1, 1.15)
             x_scaling = scaling[0]
             y_scaling = scaling[1]
             out_h = tf.cast(in_h * y_scaling, dtype=tf.int32)
             out_w = tf.cast(in_w * x_scaling, dtype=tf.int32)
-            im = tf.image.resize_area(im, [out_h, out_w])
+            im = tf.image.resize(im, [out_h, out_w], method=tf.image.ResizeMethod.AREA)
             fx = intrinsics[:,0,0] * x_scaling
             fy = intrinsics[:,1,1] * y_scaling
             cx = intrinsics[:,0,2] * x_scaling
@@ -177,9 +177,9 @@ class DataLoader(object):
         # Random cropping
         def random_cropping(im, intrinsics, out_h, out_w):
             # batch_size, in_h, in_w, _ = im.get_shape().as_list()
-            batch_size, in_h, in_w, _ = tf.unstack(tf.shape(im))
-            offset_y = tf.random_uniform([1], 0, in_h - out_h + 1, dtype=tf.int32)[0]
-            offset_x = tf.random_uniform([1], 0, in_w - out_w + 1, dtype=tf.int32)[0]
+            batch_size, in_h, in_w, _ = tf.unstack(tf.shape(input=im))
+            offset_y = tf.random.uniform([1], 0, in_h - out_h + 1, dtype=tf.int32)[0]
+            offset_x = tf.random.uniform([1], 0, in_w - out_w + 1, dtype=tf.int32)[0]
             im = tf.image.crop_to_bounding_box(
                 im, offset_y, offset_x, out_h, out_w)
             fx = intrinsics[:,0,0]
@@ -195,15 +195,15 @@ class DataLoader(object):
             im_f = tf.image.convert_image_dtype(im, tf.float32)
 
             # randomly shift gamma
-            random_gamma = tf.random_uniform([], 0.8, 1.2)
+            random_gamma = tf.random.uniform([], 0.8, 1.2)
             im_aug  = im_f  ** random_gamma
 
             # randomly shift brightness
-            random_brightness = tf.random_uniform([], 0.5, 2.0)
+            random_brightness = tf.random.uniform([], 0.5, 2.0)
             im_aug  =  im_aug * random_brightness
 
             # randomly shift color
-            random_colors = tf.random_uniform([in_c], 0.8, 1.2)
+            random_colors = tf.random.uniform([in_c], 0.8, 1.2)
             white = tf.ones([batch_size, in_h, in_w])
             color_image = tf.stack([white * random_colors[i] for i in range(in_c)], axis=3)
             im_aug  *= color_image
@@ -288,14 +288,14 @@ class DataLoader(object):
             # r3 = tf.constant([0., 0., 1.])
             proj_cam2pix.append(self.make_batch_intrinsics_matrix(fx, fy, cx, cy))
         proj_cam2pix = tf.stack(proj_cam2pix, axis=1)
-        proj_pix2cam = tf.matrix_inverse(proj_cam2pix)
+        proj_pix2cam = tf.linalg.inv(proj_cam2pix)
         proj_cam2pix.set_shape([self.batch_size, num_scales, 3, 3])
         proj_pix2cam.set_shape([self.batch_size, num_scales, 3, 3])
         return proj_cam2pix, proj_pix2cam
 
     def unpack_images(self, image_seq):
         """[h, w * seq_length, 3] -> [h, w, 3 * seq_length]."""
-        with tf.name_scope('unpack_images'):
+        with tf.compat.v1.name_scope('unpack_images'):
             image_list = [
                 image_seq[:, i * self.img_width:(i + 1) * self.img_width, :]
                 for i in range(self.seq_length)
@@ -314,36 +314,36 @@ class DataLoader(object):
         """Apply data augmentation to inputs."""
         image_stack_aug = image_stack
         # Randomly shift brightness.
-        apply_brightness = tf.less(tf.random_uniform(
+        apply_brightness = tf.less(tf.random.uniform(
             shape=[], minval=0.0, maxval=1.0, dtype=tf.float32), 0.5)
         image_stack_aug = tf.cond(
-            apply_brightness,
-            lambda: tf.image.random_brightness(image_stack_aug, max_delta=0.1),
-            lambda: image_stack_aug)
+            pred=apply_brightness,
+            true_fn=lambda: tf.image.random_brightness(image_stack_aug, max_delta=0.1),
+            false_fn=lambda: image_stack_aug)
 
         # Randomly shift contrast.
-        apply_contrast = tf.less(tf.random_uniform(
+        apply_contrast = tf.less(tf.random.uniform(
             shape=[], minval=0.0, maxval=1.0, dtype=tf.float32), 0.5)
         image_stack_aug = tf.cond(
-            apply_contrast,
-            lambda: tf.image.random_contrast(image_stack_aug, 0.85, 1.15),
-            lambda: image_stack_aug)
+            pred=apply_contrast,
+            true_fn=lambda: tf.image.random_contrast(image_stack_aug, 0.85, 1.15),
+            false_fn=lambda: image_stack_aug)
 
         # Randomly change saturation.
-        apply_saturation = tf.less(tf.random_uniform(
+        apply_saturation = tf.less(tf.random.uniform(
             shape=[], minval=0.0, maxval=1.0, dtype=tf.float32), 0.5)
         image_stack_aug = tf.cond(
-            apply_saturation,
-            lambda: tf.image.random_saturation(image_stack_aug, 0.85, 1.15),
-            lambda: image_stack_aug)
+            pred=apply_saturation,
+            true_fn=lambda: tf.image.random_saturation(image_stack_aug, 0.85, 1.15),
+            false_fn=lambda: image_stack_aug)
 
         # Randomly change hue.
-        apply_hue = tf.less(tf.random_uniform(
+        apply_hue = tf.less(tf.random.uniform(
             shape=[], minval=0.0, maxval=1.0, dtype=tf.float32), 0.5)
         image_stack_aug = tf.cond(
-            apply_hue,
-            lambda: tf.image.random_hue(image_stack_aug, max_delta=0.1),
-            lambda: image_stack_aug)
+            pred=apply_hue,
+            true_fn=lambda: tf.image.random_hue(image_stack_aug, max_delta=0.1),
+            false_fn=lambda: image_stack_aug)
 
         image_stack_aug = tf.clip_by_value(image_stack_aug, 0, 1)
         return image_stack_aug
@@ -362,11 +362,11 @@ class DataLoader(object):
             return (tf.image.flip_left_right(image_stack), intrinsics)
 
         if randomized:
-            prob = tf.random_uniform(shape=[], minval=0.0, maxval=1.0, dtype=tf.float32)
+            prob = tf.random.uniform(shape=[], minval=0.0, maxval=1.0, dtype=tf.float32)
             predicate = tf.less(prob, 0.5)
-            return tf.cond(predicate,
-                           lambda: flip(cls, image_stack, intrinsics),
-                           lambda: (image_stack, intrinsics))
+            return tf.cond(pred=predicate,
+                           true_fn=lambda: flip(cls, image_stack, intrinsics),
+                           false_fn=lambda: (image_stack, intrinsics))
         else:
            return flip(cls, image_stack, intrinsics)
 
@@ -377,14 +377,14 @@ class DataLoader(object):
         def scale_randomly(im, intrinsics):
             """Scales image and adjust intrinsics accordingly."""
             in_h, in_w, _ = im.get_shape().as_list()
-            scaling = tf.random_uniform([2], 1, 1.15)
+            scaling = tf.random.uniform([2], 1, 1.15)
             x_scaling = scaling[0]
             y_scaling = scaling[1]
             out_h = tf.cast(in_h * y_scaling, dtype=tf.int32)
             out_w = tf.cast(in_w * x_scaling, dtype=tf.int32)
             # Add batch.
             im = tf.expand_dims(im, 0)
-            im = tf.image.resize_area(im, [out_h, out_w])
+            im = tf.image.resize(im, [out_h, out_w], method=tf.image.ResizeMethod.AREA)
             im = im[0]
             fx = intrinsics[0, 0] * x_scaling
             fy = intrinsics[1, 1] * y_scaling
@@ -397,9 +397,9 @@ class DataLoader(object):
         def crop_randomly(im, intrinsics, out_h, out_w):
             """Crops image and adjust intrinsics accordingly."""
             # batch_size, in_h, in_w, _ = im.get_shape().as_list()
-            in_h, in_w, _ = tf.unstack(tf.shape(im))
-            offset_y = tf.random_uniform([1], 0, in_h - out_h + 1, dtype=tf.int32)[0]
-            offset_x = tf.random_uniform([1], 0, in_w - out_w + 1, dtype=tf.int32)[0]
+            in_h, in_w, _ = tf.unstack(tf.shape(input=im))
+            offset_y = tf.random.uniform([1], 0, in_h - out_h + 1, dtype=tf.int32)[0]
+            offset_x = tf.random.uniform([1], 0, in_w - out_w + 1, dtype=tf.int32)[0]
             im = tf.image.crop_to_bounding_box(im, offset_y, offset_x, out_h, out_w)
             fx = intrinsics[0, 0]
             fy = intrinsics[1, 1]
@@ -472,13 +472,13 @@ class AirSim_DataLoader(object):
         file_list['image_file_list'] = image_file_list
         self.steps_per_epoch = len(image_file_list) // self.batch_size
 
-        image_paths_queue = tf.train.string_input_producer(
+        image_paths_queue = tf.compat.v1.train.string_input_producer(
             file_list['image_file_list'], seed=seed,
             shuffle=self.shuffle,
             num_epochs=(1 if not self.shuffle else None))
 
         # Load images
-        img_reader = tf.WholeFileReader()
+        img_reader = tf.compat.v1.WholeFileReader()
         _, image_contents = img_reader.read(image_paths_queue)
         if self.file_extension == 'jpg':
             image_seq = tf.image.decode_jpeg(image_contents)
@@ -489,13 +489,13 @@ class AirSim_DataLoader(object):
             tgt_image_o, src_image_stack_o = self.unpack_image_sequence(image_seq, self.img_height, self.img_width, self.num_source)
 
             if self.shuffle:
-                tgt_image_o, src_image_stack_o = tf.train.shuffle_batch(
+                tgt_image_o, src_image_stack_o = tf.compat.v1.train.shuffle_batch(
                     [tgt_image_o, src_image_stack_o],
                     batch_size=self.batch_size,
                     capacity=QUEUE_SIZE + QUEUE_BUFFER * self.batch_size,
                     min_after_dequeue=QUEUE_SIZE)
             else:
-                tgt_image_o, src_image_stack_o = tf.train.batch(
+                tgt_image_o, src_image_stack_o = tf.compat.v1.train.batch(
                     [tgt_image_o, src_image_stack_o],
                     batch_size=self.batch_size,
                     num_threads=1,
@@ -534,7 +534,7 @@ class AirSim_DataLoader(object):
             return tgt_image_o, src_image_stack
         else:
             """ Data Loading and Augmentation for depth & pose """
-            with tf.name_scope('load_intrinsics'):
+            with tf.compat.v1.name_scope('load_intrinsics'):
                 # cam_reader = tf.TextLineReader()
                 # _, raw_cam_contents = cam_reader.read(cam_paths_queue)
                 # rec_def = []
@@ -546,7 +546,7 @@ class AirSim_DataLoader(object):
                 raw_cam_vec = tf.constant([96, 0, 96, 0, 320, 320, 0, 0, 1], dtype=tf.float32)
                 intrinsics = tf.reshape(raw_cam_vec, [3, 3])
 
-            with tf.name_scope('convert_image'):
+            with tf.compat.v1.name_scope('convert_image'):
                 image_seq = self.preprocess_image(image_seq)  # Converts to float.
 
             # if self.random_color:
@@ -566,10 +566,10 @@ class AirSim_DataLoader(object):
             #         image_stack, intrinsics = self.augment_images_scale_crop(
             #             image_stack, intrinsics, self.img_height, self.img_width)
 
-            with tf.name_scope('multi_scale_intrinsics'):
+            with tf.compat.v1.name_scope('multi_scale_intrinsics'):
                 intrinsic_mat = self.get_multi_scale_intrinsics(intrinsics, self.num_scales)
                 intrinsic_mat.set_shape([self.num_scales, 3, 3])
-                intrinsic_mat_inv = tf.matrix_inverse(intrinsic_mat)
+                intrinsic_mat_inv = tf.linalg.inv(intrinsic_mat)
                 intrinsic_mat_inv.set_shape([self.num_scales, 3, 3])
 
             if self.imagenet_norm:
@@ -581,19 +581,19 @@ class AirSim_DataLoader(object):
             else:
                 image_stack_norm = image_stack
 
-            with tf.name_scope('batching'):
+            with tf.compat.v1.name_scope('batching'):
                 min_after_dequeue = 2048
                 capacity = min_after_dequeue + 4 * self.batch_size
                 if self.shuffle:
                     logging.info("[Info] Shuffling the batch")
-                    (image_stack, image_stack_norm, intrinsic_mat, intrinsic_mat_inv) = tf.train.shuffle_batch(
+                    (image_stack, image_stack_norm, intrinsic_mat, intrinsic_mat_inv) = tf.compat.v1.train.shuffle_batch(
                         [image_stack, image_stack_norm, intrinsic_mat, intrinsic_mat_inv],
                         batch_size=self.batch_size,
                         capacity=capacity,
                         min_after_dequeue=min_after_dequeue,
                         num_threads=10)
                 else:
-                    (image_stack, image_stack_norm, intrinsic_mat, intrinsic_mat_inv) = tf.train.batch(
+                    (image_stack, image_stack_norm, intrinsic_mat, intrinsic_mat_inv) = tf.compat.v1.train.batch(
                         [image_stack, image_stack_norm, intrinsic_mat, intrinsic_mat_inv],
                         batch_size=self.batch_size,
                         num_threads=1,
@@ -616,12 +616,12 @@ class AirSim_DataLoader(object):
         # Random scaling
         def random_scaling(im, intrinsics):
             batch_size, in_h, in_w, _ = im.get_shape().as_list()
-            scaling = tf.random_uniform([2], 1, 1.15)
+            scaling = tf.random.uniform([2], 1, 1.15)
             x_scaling = scaling[0]
             y_scaling = scaling[1]
             out_h = tf.cast(in_h * y_scaling, dtype=tf.int32)
             out_w = tf.cast(in_w * x_scaling, dtype=tf.int32)
-            im = tf.image.resize_area(im, [out_h, out_w])
+            im = tf.image.resize(im, [out_h, out_w], method=tf.image.ResizeMethod.AREA)
             fx = intrinsics[:,0,0] * x_scaling
             fy = intrinsics[:,1,1] * y_scaling
             cx = intrinsics[:,0,2] * x_scaling
@@ -632,9 +632,9 @@ class AirSim_DataLoader(object):
         # Random cropping
         def random_cropping(im, intrinsics, out_h, out_w):
             # batch_size, in_h, in_w, _ = im.get_shape().as_list()
-            batch_size, in_h, in_w, _ = tf.unstack(tf.shape(im))
-            offset_y = tf.random_uniform([1], 0, in_h - out_h + 1, dtype=tf.int32)[0]
-            offset_x = tf.random_uniform([1], 0, in_w - out_w + 1, dtype=tf.int32)[0]
+            batch_size, in_h, in_w, _ = tf.unstack(tf.shape(input=im))
+            offset_y = tf.random.uniform([1], 0, in_h - out_h + 1, dtype=tf.int32)[0]
+            offset_x = tf.random.uniform([1], 0, in_w - out_w + 1, dtype=tf.int32)[0]
             im = tf.image.crop_to_bounding_box(
                 im, offset_y, offset_x, out_h, out_w)
             fx = intrinsics[:,0,0]
@@ -650,15 +650,15 @@ class AirSim_DataLoader(object):
             im_f = tf.image.convert_image_dtype(im, tf.float32)
 
             # randomly shift gamma
-            random_gamma = tf.random_uniform([], 0.8, 1.2)
+            random_gamma = tf.random.uniform([], 0.8, 1.2)
             im_aug  = im_f  ** random_gamma
 
             # randomly shift brightness
-            random_brightness = tf.random_uniform([], 0.5, 2.0)
+            random_brightness = tf.random.uniform([], 0.5, 2.0)
             im_aug  =  im_aug * random_brightness
 
             # randomly shift color
-            random_colors = tf.random_uniform([in_c], 0.8, 1.2)
+            random_colors = tf.random.uniform([in_c], 0.8, 1.2)
             white = tf.ones([batch_size, in_h, in_w])
             color_image = tf.stack([white * random_colors[i] for i in range(in_c)], axis=3)
             im_aug  *= color_image
@@ -743,14 +743,14 @@ class AirSim_DataLoader(object):
             # r3 = tf.constant([0., 0., 1.])
             proj_cam2pix.append(self.make_batch_intrinsics_matrix(fx, fy, cx, cy))
         proj_cam2pix = tf.stack(proj_cam2pix, axis=1)
-        proj_pix2cam = tf.matrix_inverse(proj_cam2pix)
+        proj_pix2cam = tf.linalg.inv(proj_cam2pix)
         proj_cam2pix.set_shape([self.batch_size, num_scales, 3, 3])
         proj_pix2cam.set_shape([self.batch_size, num_scales, 3, 3])
         return proj_cam2pix, proj_pix2cam
 
     def unpack_images(self, image_seq):
         """[h, w * seq_length, 3] -> [h, w, 3 * seq_length]."""
-        with tf.name_scope('unpack_images'):
+        with tf.compat.v1.name_scope('unpack_images'):
             image_list = [
                 image_seq[:, i * self.img_width:(i + 1) * self.img_width, :]
                 for i in range(self.seq_length)
@@ -769,36 +769,36 @@ class AirSim_DataLoader(object):
         """Apply data augmentation to inputs."""
         image_stack_aug = image_stack
         # Randomly shift brightness.
-        apply_brightness = tf.less(tf.random_uniform(
+        apply_brightness = tf.less(tf.random.uniform(
             shape=[], minval=0.0, maxval=1.0, dtype=tf.float32), 0.5)
         image_stack_aug = tf.cond(
-            apply_brightness,
-            lambda: tf.image.random_brightness(image_stack_aug, max_delta=0.1),
-            lambda: image_stack_aug)
+            pred=apply_brightness,
+            true_fn=lambda: tf.image.random_brightness(image_stack_aug, max_delta=0.1),
+            false_fn=lambda: image_stack_aug)
 
         # Randomly shift contrast.
-        apply_contrast = tf.less(tf.random_uniform(
+        apply_contrast = tf.less(tf.random.uniform(
             shape=[], minval=0.0, maxval=1.0, dtype=tf.float32), 0.5)
         image_stack_aug = tf.cond(
-            apply_contrast,
-            lambda: tf.image.random_contrast(image_stack_aug, 0.85, 1.15),
-            lambda: image_stack_aug)
+            pred=apply_contrast,
+            true_fn=lambda: tf.image.random_contrast(image_stack_aug, 0.85, 1.15),
+            false_fn=lambda: image_stack_aug)
 
         # Randomly change saturation.
-        apply_saturation = tf.less(tf.random_uniform(
+        apply_saturation = tf.less(tf.random.uniform(
             shape=[], minval=0.0, maxval=1.0, dtype=tf.float32), 0.5)
         image_stack_aug = tf.cond(
-            apply_saturation,
-            lambda: tf.image.random_saturation(image_stack_aug, 0.85, 1.15),
-            lambda: image_stack_aug)
+            pred=apply_saturation,
+            true_fn=lambda: tf.image.random_saturation(image_stack_aug, 0.85, 1.15),
+            false_fn=lambda: image_stack_aug)
 
         # Randomly change hue.
-        apply_hue = tf.less(tf.random_uniform(
+        apply_hue = tf.less(tf.random.uniform(
             shape=[], minval=0.0, maxval=1.0, dtype=tf.float32), 0.5)
         image_stack_aug = tf.cond(
-            apply_hue,
-            lambda: tf.image.random_hue(image_stack_aug, max_delta=0.1),
-            lambda: image_stack_aug)
+            pred=apply_hue,
+            true_fn=lambda: tf.image.random_hue(image_stack_aug, max_delta=0.1),
+            false_fn=lambda: image_stack_aug)
 
         image_stack_aug = tf.clip_by_value(image_stack_aug, 0, 1)
         return image_stack_aug
@@ -817,11 +817,11 @@ class AirSim_DataLoader(object):
             return (tf.image.flip_left_right(image_stack), intrinsics)
 
         if randomized:
-            prob = tf.random_uniform(shape=[], minval=0.0, maxval=1.0, dtype=tf.float32)
+            prob = tf.random.uniform(shape=[], minval=0.0, maxval=1.0, dtype=tf.float32)
             predicate = tf.less(prob, 0.5)
-            return tf.cond(predicate,
-                           lambda: flip(cls, image_stack, intrinsics),
-                           lambda: (image_stack, intrinsics))
+            return tf.cond(pred=predicate,
+                           true_fn=lambda: flip(cls, image_stack, intrinsics),
+                           false_fn=lambda: (image_stack, intrinsics))
         else:
            return flip(cls, image_stack, intrinsics)
 
@@ -832,14 +832,14 @@ class AirSim_DataLoader(object):
         def scale_randomly(im, intrinsics):
             """Scales image and adjust intrinsics accordingly."""
             in_h, in_w, _ = im.get_shape().as_list()
-            scaling = tf.random_uniform([2], 1, 1.15)
+            scaling = tf.random.uniform([2], 1, 1.15)
             x_scaling = scaling[0]
             y_scaling = scaling[1]
             out_h = tf.cast(in_h * y_scaling, dtype=tf.int32)
             out_w = tf.cast(in_w * x_scaling, dtype=tf.int32)
             # Add batch.
             im = tf.expand_dims(im, 0)
-            im = tf.image.resize_area(im, [out_h, out_w])
+            im = tf.image.resize(im, [out_h, out_w], method=tf.image.ResizeMethod.AREA)
             im = im[0]
             fx = intrinsics[0, 0] * x_scaling
             fy = intrinsics[1, 1] * y_scaling
@@ -852,9 +852,9 @@ class AirSim_DataLoader(object):
         def crop_randomly(im, intrinsics, out_h, out_w):
             """Crops image and adjust intrinsics accordingly."""
             # batch_size, in_h, in_w, _ = im.get_shape().as_list()
-            in_h, in_w, _ = tf.unstack(tf.shape(im))
-            offset_y = tf.random_uniform([1], 0, in_h - out_h + 1, dtype=tf.int32)[0]
-            offset_x = tf.random_uniform([1], 0, in_w - out_w + 1, dtype=tf.int32)[0]
+            in_h, in_w, _ = tf.unstack(tf.shape(input=im))
+            offset_y = tf.random.uniform([1], 0, in_h - out_h + 1, dtype=tf.int32)[0]
+            offset_x = tf.random.uniform([1], 0, in_w - out_w + 1, dtype=tf.int32)[0]
             im = tf.image.crop_to_bounding_box(im, offset_y, offset_x, out_h, out_w)
             fx = intrinsics[0, 0]
             fy = intrinsics[1, 1]

@@ -69,14 +69,14 @@ class Model(object):
         print("[Info] Building flow network ...")
         print("[Info] img_height:", self.img_height, "img_width", self.img_width)
 
-        with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+        with tf.compat.v1.variable_scope(scope, reuse=tf.compat.v1.AUTO_REUSE):
             feature1_flow = feature_pyramid_flow(self.tgt_image, reuse=False)
             feature0_flow = feature_pyramid_flow(self.src_image_stack[:,:,:,0:3], reuse=True)
             feature2_flow = feature_pyramid_flow(self.src_image_stack[:,:,:,3:6], reuse=True)
 
             flow_fw0 = construct_model_pwc_full(self.src_image_stack[:,:,:,0:3], self.tgt_image, feature0_flow, feature1_flow)
 
-        with tf.variable_scope(scope, reuse=True):
+        with tf.compat.v1.variable_scope(scope, reuse=True):
             flow_fw1 = construct_model_pwc_full(self.tgt_image, self.src_image_stack[:,:,:,3:6], feature1_flow, feature2_flow)
             flow_fw2 = construct_model_pwc_full(self.src_image_stack[:,:,:,0:3], self.src_image_stack[:,:,:,3:6], feature0_flow, feature2_flow)
             flow_bw0 = construct_model_pwc_full(self.tgt_image, self.src_image_stack[:,:,:,0:3], feature1_flow, feature0_flow)
@@ -98,11 +98,11 @@ class Model(object):
         def spatial_normalize(self, disp):
         # Credit: https://github.com/yzcjtr/GeoNet/blob/master/geonet_model.py
             _, curr_h, curr_w, curr_c = disp.get_shape().as_list()
-            disp_mean = tf.reduce_mean(disp, axis=[1,2,3], keepdims=True)
+            disp_mean = tf.reduce_mean(input_tensor=disp, axis=[1,2,3], keepdims=True)
             disp_mean = tf.tile(disp_mean, [1, curr_h, curr_w, curr_c])
             return disp/disp_mean
 
-        with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+        with tf.compat.v1.variable_scope(scope, reuse=tf.compat.v1.AUTO_REUSE):
             tgt_pred_disp, tgt_disp_bottlenecks = D_Net(self.tgt_image_norm, weight_reg=self.weight_reg, is_training=True, reuse=False)
             if scale_normalize:
                 # As proposed in https://arxiv.org/abs/1712.00175, this can
@@ -115,9 +115,9 @@ class Model(object):
             if self.is_depth_upsampling:
                 self.depth_upsampled['tgt'] = []
                 for s in range(len(tgt_pred_depth)):
-                    self.depth_upsampled['tgt'].append(tf.image.resize_bilinear(
+                    self.depth_upsampled['tgt'].append(tf.image.resize(
                         tgt_pred_depth[s], [self.img_height, self.img_width],
-                        align_corners=True))
+                        method=tf.image.ResizeMethod.BILINEAR))
 
             for i in range(self.num_source):
                 temp_disp, temp_disp_bottlenecks = D_Net(self.src_image_stack_norm[:,:,:,3*i:3*(i+1)], weight_reg=self.weight_reg, is_training=True, reuse=True)
@@ -130,9 +130,9 @@ class Model(object):
                 self.disp_bottleneck[name] = temp_disp_bottlenecks
                 self.depth_upsampled[name] = []
                 for s in range(len(temp_depth)):
-                    self.depth_upsampled[name].append(tf.image.resize_bilinear(
+                    self.depth_upsampled[name].append(tf.image.resize(
                         temp_depth[s], [self.img_height, self.img_width],
-                        align_corners=True))
+                        method=tf.image.ResizeMethod.BILINEAR))
 
             if self.joint_encoder:
                 disp_bottleneck_stack = tf.concat([self.disp_bottleneck['src0'], self.disp_bottleneck['tgt'], self.disp_bottleneck['src1']], axis=3)
@@ -211,10 +211,10 @@ class Model(object):
         for s in range(self.num_scales):
             H = int(self.img_height / (2**s))
             W = int(self.img_width  / (2**s))
-            curr_tgt_image = tf.image.resize_area(
-                self.tgt_image, [H, W])
-            curr_src_image_stack = tf.image.resize_area(
-                self.src_image_stack, [H, W])
+            curr_tgt_image = tf.image.resize(
+                self.tgt_image, [H, W], method=tf.image.ResizeMethod.AREA)
+            curr_src_image_stack = tf.image.resize(
+                self.src_image_stack, [H, W], method=tf.image.ResizeMethod.AREA)
 
             curr_tgt_image_all.append(curr_tgt_image)
             curr_src_image_stack_all.append(curr_src_image_stack)
@@ -223,61 +223,61 @@ class Model(object):
             curr_proj_image_optical_src0 = transformer_old(curr_tgt_image, self.pred_fw_flows[0][s], [H, W])
             curr_proj_error_optical_src0 = tf.abs(curr_proj_image_optical_src0 - curr_src_image_stack[:,:,:,0:3])
             reconstructed_loss += tf.reduce_mean(
-                curr_proj_error_optical_src0 * occu_masks_bw[0][s]) / occu_masks_bw_avg[0][s]
+                input_tensor=curr_proj_error_optical_src0 * occu_masks_bw[0][s]) / occu_masks_bw_avg[0][s]
 
             curr_proj_image_optical_src0_1 = transformer_old(curr_src_image_stack[:,:,:,3:6], self.pred_fw_flows[2][s], [H, W])
             curr_proj_error_optical_src0_1 = tf.abs(curr_proj_image_optical_src0_1 - curr_src_image_stack[:,:,:,0:3])
             cross_reconstructed_loss += tf.reduce_mean(
-                curr_proj_error_optical_src0_1 * occu_masks_bw[2][s]) / occu_masks_bw_avg[2][s]
+                input_tensor=curr_proj_error_optical_src0_1 * occu_masks_bw[2][s]) / occu_masks_bw_avg[2][s]
 
             # tgt
             curr_proj_image_optical_tgt = transformer_old(curr_src_image_stack[:,:,:,3:6], self.pred_fw_flows[1][s], [H, W])
             curr_proj_error_optical_tgt = tf.abs(curr_proj_image_optical_tgt - curr_tgt_image)
             reconstructed_loss += tf.reduce_mean(
-                curr_proj_error_optical_tgt * occu_masks_bw[1][s]) / occu_masks_bw_avg[1][s]
+                input_tensor=curr_proj_error_optical_tgt * occu_masks_bw[1][s]) / occu_masks_bw_avg[1][s]
 
             curr_proj_image_optical_tgt_1 = transformer_old(curr_src_image_stack[:,:,:,0:3], self.pred_bw_flows[0][s], [H, W])
             curr_proj_error_optical_tgt_1 = tf.abs(curr_proj_image_optical_tgt_1 - curr_tgt_image)
             reconstructed_loss += tf.reduce_mean(
-                curr_proj_error_optical_tgt_1 * occu_masks_fw[0][s]) / occu_masks_fw_avg[0][s]
+                input_tensor=curr_proj_error_optical_tgt_1 * occu_masks_fw[0][s]) / occu_masks_fw_avg[0][s]
 
             # src1
             curr_proj_image_optical_src1 = transformer_old(curr_tgt_image, self.pred_bw_flows[1][s], [H, W])
             curr_proj_error_optical_src1 = tf.abs(curr_proj_image_optical_src1 - curr_src_image_stack[:,:,:,3:6])
             reconstructed_loss += tf.reduce_mean(
-                curr_proj_error_optical_src1 * occu_masks_fw[1][s]) / occu_masks_fw_avg[1][s]
+                input_tensor=curr_proj_error_optical_src1 * occu_masks_fw[1][s]) / occu_masks_fw_avg[1][s]
 
             curr_proj_image_optical_src1_1 = transformer_old(curr_src_image_stack[:,:,:,0:3], self.pred_bw_flows[2][s], [H, W])
             curr_proj_error_optical_src1_1 = tf.abs(curr_proj_image_optical_src1_1 - curr_src_image_stack[:,:,:,3:6])
             cross_reconstructed_loss += tf.reduce_mean(
-                curr_proj_error_optical_src1_1 * occu_masks_fw[2][s]) / occu_masks_fw_avg[2][s]
+                input_tensor=curr_proj_error_optical_src1_1 * occu_masks_fw[2][s]) / occu_masks_fw_avg[2][s]
 
             if self.ssim_weight > 0:
                 # src0
                 ssim_loss += tf.reduce_mean(
-                    SSIM(curr_proj_image_optical_src0 * occu_masks_bw[0][s],
+                    input_tensor=SSIM(curr_proj_image_optical_src0 * occu_masks_bw[0][s],
                          curr_src_image_stack[:,:,:,0:3] * occu_masks_bw[0][s])) / occu_masks_bw_avg[0][s]
 
                 cross_ssim_loss += tf.reduce_mean(
-                    SSIM(curr_proj_image_optical_src0_1 * occu_masks_bw[2][s],
+                    input_tensor=SSIM(curr_proj_image_optical_src0_1 * occu_masks_bw[2][s],
                          curr_src_image_stack[:,:,:,0:3] * occu_masks_bw[2][s])) / occu_masks_bw_avg[2][s]
 
                 # tgt
                 ssim_loss += tf.reduce_mean(
-                    SSIM(curr_proj_image_optical_tgt * occu_masks_bw[1][s],
+                    input_tensor=SSIM(curr_proj_image_optical_tgt * occu_masks_bw[1][s],
                          curr_tgt_image * occu_masks_bw[1][s])) / occu_masks_bw_avg[1][s]
 
                 ssim_loss += tf.reduce_mean(
-                    SSIM(curr_proj_image_optical_tgt_1 * occu_masks_fw[0][s],
+                    input_tensor=SSIM(curr_proj_image_optical_tgt_1 * occu_masks_fw[0][s],
                          curr_tgt_image * occu_masks_fw[0][s])) / occu_masks_fw_avg[0][s]
 
                 # src1
                 ssim_loss += tf.reduce_mean(
-                    SSIM(curr_proj_image_optical_src1 * occu_masks_fw[1][s],
+                    input_tensor=SSIM(curr_proj_image_optical_src1 * occu_masks_fw[1][s],
                          curr_src_image_stack[:,:,:,3:6] * occu_masks_fw[1][s])) / occu_masks_fw_avg[1][s]
 
                 cross_ssim_loss += tf.reduce_mean(
-                    SSIM(curr_proj_image_optical_src1_1 * occu_masks_fw[2][s],
+                    input_tensor=SSIM(curr_proj_image_optical_src1_1 * occu_masks_fw[2][s],
                          curr_src_image_stack[:,:,:,3:6] * occu_masks_fw[2][s])) / occu_masks_fw_avg[2][s]
 
             # Compute second-order derivatives for flow smoothness loss
@@ -316,36 +316,36 @@ class Model(object):
                       self.flow_smooth_weight * (flow_smooth_loss + self.flow_cross_geometry_weight*cross_flow_smooth_loss)
 
         summaries = []
-        summaries.append(tf.summary.scalar("total_loss", self.losses))
-        summaries.append(tf.summary.scalar("reconstructed_loss", reconstructed_loss))
-        summaries.append(tf.summary.scalar("cross_reconstructed_loss", cross_reconstructed_loss))
-        summaries.append(tf.summary.scalar("ssim_loss", ssim_loss))
-        summaries.append(tf.summary.scalar("cross_ssim_loss", cross_ssim_loss))
-        summaries.append(tf.summary.scalar("flow_smooth_loss", flow_smooth_loss))
-        summaries.append(tf.summary.scalar("cross_flow_smooth_loss", cross_flow_smooth_loss))
+        summaries.append(tf.compat.v1.summary.scalar("total_loss", self.losses))
+        summaries.append(tf.compat.v1.summary.scalar("reconstructed_loss", reconstructed_loss))
+        summaries.append(tf.compat.v1.summary.scalar("cross_reconstructed_loss", cross_reconstructed_loss))
+        summaries.append(tf.compat.v1.summary.scalar("ssim_loss", ssim_loss))
+        summaries.append(tf.compat.v1.summary.scalar("cross_ssim_loss", cross_ssim_loss))
+        summaries.append(tf.compat.v1.summary.scalar("flow_smooth_loss", flow_smooth_loss))
+        summaries.append(tf.compat.v1.summary.scalar("cross_flow_smooth_loss", cross_flow_smooth_loss))
 
         s = 0
-        tf.summary.image('scale%d_target_image' % s, tf.image.convert_image_dtype(curr_tgt_image_all[0], dtype=tf.uint8))
+        tf.compat.v1.summary.image('scale%d_target_image' % s, tf.image.convert_image_dtype(curr_tgt_image_all[0], dtype=tf.uint8))
 
         for i in range(self.num_source):
-            tf.summary.image('scale%d_src_image_%d' % (s, i), \
+            tf.compat.v1.summary.image('scale%d_src_image_%d' % (s, i), \
                             tf.image.convert_image_dtype(curr_src_image_stack_all[0][:, :, :, i*3:(i+1)*3], dtype=tf.uint8))
 
-        tf.summary.image('scale%d_flow_src02tgt' % s, fl.flow_to_color(self.pred_fw_flows[0][s], max_flow=256))
-        tf.summary.image('scale%d_flow_tgt2src1' % s, fl.flow_to_color(self.pred_fw_flows[1][s], max_flow=256))
-        tf.summary.image('scale%d_flow_src02src1' % s, fl.flow_to_color(self.pred_fw_flows[2][s], max_flow=256))
-        tf.summary.image('scale%d_flow_tgt2src0' % s, fl.flow_to_color(self.pred_bw_flows[0][s], max_flow=256))
-        tf.summary.image('scale%d_flow_src12tgt' % s, fl.flow_to_color(self.pred_bw_flows[1][s], max_flow=256))
-        tf.summary.image('scale%d_flow_src12src0' % s, fl.flow_to_color(self.pred_bw_flows[2][s], max_flow=256))
+        tf.compat.v1.summary.image('scale%d_flow_src02tgt' % s, fl.flow_to_color(self.pred_fw_flows[0][s], max_flow=256))
+        tf.compat.v1.summary.image('scale%d_flow_tgt2src1' % s, fl.flow_to_color(self.pred_fw_flows[1][s], max_flow=256))
+        tf.compat.v1.summary.image('scale%d_flow_src02src1' % s, fl.flow_to_color(self.pred_fw_flows[2][s], max_flow=256))
+        tf.compat.v1.summary.image('scale%d_flow_tgt2src0' % s, fl.flow_to_color(self.pred_bw_flows[0][s], max_flow=256))
+        tf.compat.v1.summary.image('scale%d_flow_src12tgt' % s, fl.flow_to_color(self.pred_bw_flows[1][s], max_flow=256))
+        tf.compat.v1.summary.image('scale%d_flow_src12src0' % s, fl.flow_to_color(self.pred_bw_flows[2][s], max_flow=256))
 
-        tf.summary.image('scale_flyout_mask_src0', occlusion_map_0_all)
-        tf.summary.image('scale_flyout_mask_tgt', occlusion_map_1_all)
-        tf.summary.image('scale_flyout_mask_src0_1', occlusion_map_2_all)
-        tf.summary.image('scale_flyout_mask_tgt1', occlusion_map_3_all)
-        tf.summary.image('scale_flyout_mask_src1', occlusion_map_4_all)
-        tf.summary.image('scale_flyout_mask_src1_1', occlusion_map_5_all)
+        tf.compat.v1.summary.image('scale_flyout_mask_src0', occlusion_map_0_all)
+        tf.compat.v1.summary.image('scale_flyout_mask_tgt', occlusion_map_1_all)
+        tf.compat.v1.summary.image('scale_flyout_mask_src0_1', occlusion_map_2_all)
+        tf.compat.v1.summary.image('scale_flyout_mask_tgt1', occlusion_map_3_all)
+        tf.compat.v1.summary.image('scale_flyout_mask_src1', occlusion_map_4_all)
+        tf.compat.v1.summary.image('scale_flyout_mask_src1_1', occlusion_map_5_all)
 
-        self.summ_op = tf.summary.merge(summaries)
+        self.summ_op = tf.compat.v1.summary.merge(summaries)
 
     # in build_losses() 
     def build_dp_loss(self):
@@ -415,10 +415,10 @@ class Model(object):
                 self.scaled_tgt_images[s] = self.tgt_image
                 self.scaled_src_images_stack[s] = self.src_image_stack
             else:
-                self.scaled_tgt_images[s] = tf.image.resize_bilinear(
-                    self.tgt_image, [int(self.img_height/(2**s)), int(self.img_width/(2**s))], align_corners=True)
-                self.scaled_src_images_stack[s] = tf.image.resize_bilinear(
-                    self.src_image_stack, [int(self.img_height/(2**s)), int(self.img_width/(2**s))], align_corners=True)
+                self.scaled_tgt_images[s] = tf.image.resize(
+                    self.tgt_image, [int(self.img_height/(2**s)), int(self.img_width/(2**s))], method=tf.image.ResizeMethod.BILINEAR)
+                self.scaled_src_images_stack[s] = tf.image.resize(
+                    self.src_image_stack, [int(self.img_height/(2**s)), int(self.img_width/(2**s))], method=tf.image.ResizeMethod.BILINEAR)
 
             selected_scale = 0 if self.is_depth_upsampling else s
             H = int(self.img_height / (2**selected_scale))
@@ -491,34 +491,34 @@ class Model(object):
 
             if not self.compute_minimum_loss:
                 # src0
-                reconstructed_loss += tf.reduce_mean(curr_proj_error_src0 * occu_masks_bw[0][selected_scale]) / occu_masks_bw_avg[0][selected_scale]
-                cross_reconstructed_loss += tf.reduce_mean(curr_proj_error_src0_1 * occu_masks_bw[2][selected_scale]) / occu_masks_bw_avg[2][selected_scale]
+                reconstructed_loss += tf.reduce_mean(input_tensor=curr_proj_error_src0 * occu_masks_bw[0][selected_scale]) / occu_masks_bw_avg[0][selected_scale]
+                cross_reconstructed_loss += tf.reduce_mean(input_tensor=curr_proj_error_src0_1 * occu_masks_bw[2][selected_scale]) / occu_masks_bw_avg[2][selected_scale]
                 # tgt
-                reconstructed_loss += tf.reduce_mean(curr_proj_error_tgt * occu_masks_bw[1][selected_scale]) / occu_masks_bw_avg[1][selected_scale]
-                reconstructed_loss += tf.reduce_mean(curr_proj_error_tgt_1 * occu_masks_fw[0][selected_scale]) / occu_masks_fw_avg[0][selected_scale]
+                reconstructed_loss += tf.reduce_mean(input_tensor=curr_proj_error_tgt * occu_masks_bw[1][selected_scale]) / occu_masks_bw_avg[1][selected_scale]
+                reconstructed_loss += tf.reduce_mean(input_tensor=curr_proj_error_tgt_1 * occu_masks_fw[0][selected_scale]) / occu_masks_fw_avg[0][selected_scale]
                 # src1
-                cross_reconstructed_loss += tf.reduce_mean(curr_proj_error_src1 * occu_masks_fw[2][selected_scale]) / occu_masks_fw_avg[2][selected_scale]
-                reconstructed_loss += tf.reduce_mean(curr_proj_error_src1_1 * occu_masks_fw[1][selected_scale]) / occu_masks_fw_avg[1][selected_scale]
+                cross_reconstructed_loss += tf.reduce_mean(input_tensor=curr_proj_error_src1 * occu_masks_fw[2][selected_scale]) / occu_masks_fw_avg[2][selected_scale]
+                reconstructed_loss += tf.reduce_mean(input_tensor=curr_proj_error_src1_1 * occu_masks_fw[1][selected_scale]) / occu_masks_fw_avg[1][selected_scale]
 
                 if self.ssim_weight > 0:
                     # src0
-                    ssim_loss += tf.reduce_mean(SSIM(curr_proj_image_tgt2src0 * occu_masks_bw[0][selected_scale], curr_src_image_stack[:,:,:,0:3] * occu_masks_bw[0][selected_scale])) / occu_masks_bw_avg[0][selected_scale]
-                    cross_ssim_loss += tf.reduce_mean(SSIM(curr_proj_image_src12src0 * occu_masks_bw[2][selected_scale], curr_src_image_stack[:,:,:,0:3] * occu_masks_bw[2][selected_scale])) / occu_masks_bw_avg[2][selected_scale]
+                    ssim_loss += tf.reduce_mean(input_tensor=SSIM(curr_proj_image_tgt2src0 * occu_masks_bw[0][selected_scale], curr_src_image_stack[:,:,:,0:3] * occu_masks_bw[0][selected_scale])) / occu_masks_bw_avg[0][selected_scale]
+                    cross_ssim_loss += tf.reduce_mean(input_tensor=SSIM(curr_proj_image_src12src0 * occu_masks_bw[2][selected_scale], curr_src_image_stack[:,:,:,0:3] * occu_masks_bw[2][selected_scale])) / occu_masks_bw_avg[2][selected_scale]
                     # tgt
-                    ssim_loss += tf.reduce_mean(SSIM(curr_proj_image_src12tgt * occu_masks_bw[1][selected_scale], curr_tgt_image * occu_masks_bw[1][selected_scale])) / occu_masks_bw_avg[1][selected_scale]
-                    ssim_loss += tf.reduce_mean(SSIM(curr_proj_image_src02tgt * occu_masks_fw[0][selected_scale], curr_tgt_image * occu_masks_fw[0][selected_scale])) / occu_masks_fw_avg[0][selected_scale]
+                    ssim_loss += tf.reduce_mean(input_tensor=SSIM(curr_proj_image_src12tgt * occu_masks_bw[1][selected_scale], curr_tgt_image * occu_masks_bw[1][selected_scale])) / occu_masks_bw_avg[1][selected_scale]
+                    ssim_loss += tf.reduce_mean(input_tensor=SSIM(curr_proj_image_src02tgt * occu_masks_fw[0][selected_scale], curr_tgt_image * occu_masks_fw[0][selected_scale])) / occu_masks_fw_avg[0][selected_scale]
                     # src1
-                    cross_ssim_loss += tf.reduce_mean(SSIM(curr_proj_image_src02src1 * occu_masks_fw[2][selected_scale], curr_src_image_stack[:,:,:,3:6] * occu_masks_fw[2][selected_scale])) / occu_masks_bw_avg[2][selected_scale]
-                    ssim_loss += tf.reduce_mean(SSIM(curr_proj_image_tgt2src1 * occu_masks_fw[1][selected_scale], curr_src_image_stack[:,:,:,3:6] * occu_masks_fw[1][selected_scale])) / occu_masks_fw_avg[1][selected_scale]
+                    cross_ssim_loss += tf.reduce_mean(input_tensor=SSIM(curr_proj_image_src02src1 * occu_masks_fw[2][selected_scale], curr_src_image_stack[:,:,:,3:6] * occu_masks_fw[2][selected_scale])) / occu_masks_bw_avg[2][selected_scale]
+                    ssim_loss += tf.reduce_mean(input_tensor=SSIM(curr_proj_image_tgt2src1 * occu_masks_fw[1][selected_scale], curr_src_image_stack[:,:,:,3:6] * occu_masks_fw[1][selected_scale])) / occu_masks_fw_avg[1][selected_scale]
 
             if self.dp_smooth_weight > 0:
                 if self.depth_normalization:
                     # Perform depth normalization, dividing by the mean.
-                    mean_tgt_disp = tf.reduce_mean(self.disp['tgt'][s], axis=[1, 2, 3], keepdims=True)
+                    mean_tgt_disp = tf.reduce_mean(input_tensor=self.disp['tgt'][s], axis=[1, 2, 3], keepdims=True)
                     tgt_disp_input = self.disp['tgt'][s] / mean_tgt_disp
-                    mean_src0_disp = tf.reduce_mean(self.disp['src0'][s], axis=[1, 2, 3], keepdims=True)
+                    mean_src0_disp = tf.reduce_mean(input_tensor=self.disp['src0'][s], axis=[1, 2, 3], keepdims=True)
                     src0_disp_input = self.disp['src0'][s] / mean_src0_disp
-                    mean_src1_disp = tf.reduce_mean(self.disp['src1'][s], axis=[1, 2, 3], keepdims=True)
+                    mean_src1_disp = tf.reduce_mean(input_tensor=self.disp['src1'][s], axis=[1, 2, 3], keepdims=True)
                     src1_disp_input = self.disp['src1'][s] / mean_src1_disp
                 else:
                     tgt_disp_input = self.disp['tgt'][s]
@@ -553,23 +553,23 @@ class Model(object):
         self.losses = self.dp_reconstruction_weight*((1.0 - self.ssim_weight)*(reconstructed_loss + self.dp_cross_geometry_weight*cross_reconstructed_loss) + self.ssim_weight*(ssim_loss+self.dp_cross_geometry_weight*cross_ssim_loss)) + \
                       self.dp_smooth_weight * smooth_loss
 
-        summaries.append(tf.summary.scalar("total_loss", self.losses))
-        summaries.append(tf.summary.scalar("reconstruction_loss", reconstructed_loss))
-        summaries.append(tf.summary.scalar("cross_reconstruction_loss", cross_reconstructed_loss))
-        summaries.append(tf.summary.scalar("ssim_loss", ssim_loss))
-        summaries.append(tf.summary.scalar("cross_ssim_loss", cross_ssim_loss))
-        summaries.append(tf.summary.scalar("dp_smooth_loss", smooth_loss))
+        summaries.append(tf.compat.v1.summary.scalar("total_loss", self.losses))
+        summaries.append(tf.compat.v1.summary.scalar("reconstruction_loss", reconstructed_loss))
+        summaries.append(tf.compat.v1.summary.scalar("cross_reconstruction_loss", cross_reconstructed_loss))
+        summaries.append(tf.compat.v1.summary.scalar("ssim_loss", ssim_loss))
+        summaries.append(tf.compat.v1.summary.scalar("cross_ssim_loss", cross_ssim_loss))
+        summaries.append(tf.compat.v1.summary.scalar("dp_smooth_loss", smooth_loss))
 
         s = 0
-        tf.summary.image('scale%d_target_image' % s, tf.image.convert_image_dtype(curr_tgt_image_all[0], dtype=tf.uint8))
+        tf.compat.v1.summary.image('scale%d_target_image' % s, tf.image.convert_image_dtype(curr_tgt_image_all[0], dtype=tf.uint8))
 
         for i in range(self.num_source):
-            tf.summary.image('scale%d_src_image_%d' % (s, i), tf.image.convert_image_dtype(curr_src_image_stack_all[0][:, :, :, i*3:(i+1)*3], dtype=tf.uint8))
+            tf.compat.v1.summary.image('scale%d_src_image_%d' % (s, i), tf.image.convert_image_dtype(curr_src_image_stack_all[0][:, :, :, i*3:(i+1)*3], dtype=tf.uint8))
 
-        tf.summary.image('scale%d_src0_pred_disp' % s, self.disp['src0'][s])
+        tf.compat.v1.summary.image('scale%d_src0_pred_disp' % s, self.disp['src0'][s])
         # for k in range(self.num_scales):
-        tf.summary.image('scale%d_tgt_pred_disp' % s, self.disp['tgt'][s])
-        tf.summary.image('scale%d_src1_pred_disp' % s, self.disp['src1'][s])
+        tf.compat.v1.summary.image('scale%d_tgt_pred_disp' % s, self.disp['tgt'][s])
+        tf.compat.v1.summary.image('scale%d_src1_pred_disp' % s, self.disp['src1'][s])
         # tf.summary.image('scale_proj_error_src0', proj_error_src0)
         # tf.summary.image('scale_proj_error_src0_1', proj_error_src0_1)
         # tf.summary.image('scale_proj_error_src1', proj_error_src1)
@@ -577,22 +577,22 @@ class Model(object):
         # tf.summary.image('scale_proj_error_tgt', proj_error_tgt)
         # tf.summary.image('scale_proj_error_tgt1', proj_error_tgt1)
 
-        tf.summary.image('scale%d_flow_src02tgt' % s, fl.flow_to_color(self.pred_fw_flows[0][s], max_flow=256))
-        tf.summary.image('scale%d_flow_tgt2src1' % s, fl.flow_to_color(self.pred_fw_flows[1][s], max_flow=256))
-        tf.summary.image('scale%d_flow_src02src1' % s, fl.flow_to_color(self.pred_fw_flows[2][s], max_flow=256))
-        tf.summary.image('scale%d_flow_tgt2src0' % s, fl.flow_to_color(self.pred_bw_flows[0][s], max_flow=256))
-        tf.summary.image('scale%d_flow_src12tgt' % s, fl.flow_to_color(self.pred_bw_flows[1][s], max_flow=256))
-        tf.summary.image('scale%d_flow_src12src0' % s, fl.flow_to_color(self.pred_bw_flows[2][s], max_flow=256))
+        tf.compat.v1.summary.image('scale%d_flow_src02tgt' % s, fl.flow_to_color(self.pred_fw_flows[0][s], max_flow=256))
+        tf.compat.v1.summary.image('scale%d_flow_tgt2src1' % s, fl.flow_to_color(self.pred_fw_flows[1][s], max_flow=256))
+        tf.compat.v1.summary.image('scale%d_flow_src02src1' % s, fl.flow_to_color(self.pred_fw_flows[2][s], max_flow=256))
+        tf.compat.v1.summary.image('scale%d_flow_tgt2src0' % s, fl.flow_to_color(self.pred_bw_flows[0][s], max_flow=256))
+        tf.compat.v1.summary.image('scale%d_flow_src12tgt' % s, fl.flow_to_color(self.pred_bw_flows[1][s], max_flow=256))
+        tf.compat.v1.summary.image('scale%d_flow_src12src0' % s, fl.flow_to_color(self.pred_bw_flows[2][s], max_flow=256))
 
         if self.is_depth_upsampling:
             for k in range(self.num_scales):
-                tf.summary.image('scale%d_tgt_upsampled_pred_depth' % k, upsampled_tgt_depth_all[k])
+                tf.compat.v1.summary.image('scale%d_tgt_upsampled_pred_depth' % k, upsampled_tgt_depth_all[k])
 
-        tf.summary.image('occlusion_src02tgt', flyout_map_all_tgt[0])
-        tf.summary.image('occlusion_tgt2src0', flyout_map_all_src0[0])
-        tf.summary.image('occlusion_tgt2src1', flyout_map_all_src1[0])
+        tf.compat.v1.summary.image('occlusion_src02tgt', flyout_map_all_tgt[0])
+        tf.compat.v1.summary.image('occlusion_tgt2src0', flyout_map_all_src0[0])
+        tf.compat.v1.summary.image('occlusion_tgt2src1', flyout_map_all_src1[0])
 
-        self.summ_op = tf.summary.merge(summaries)
+        self.summ_op = tf.compat.v1.summary.merge(summaries)
 
     # in build_flow_loss() & build_dp_loss()
     def occulsion(self, pred_flow, H, W):
@@ -612,6 +612,6 @@ class Model(object):
                 clip_value_max=1.0)
             ]
         occu_mask = tf.reshape(occu_mask, [self.batch_size, H, W, 1])
-        occu_mask_avg = tf.reduce_mean(occu_mask)
+        occu_mask_avg = tf.reduce_mean(input_tensor=occu_mask)
 
         return occu_mask, occu_mask_avg

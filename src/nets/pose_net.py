@@ -5,13 +5,13 @@ import tensorflow.contrib.slim as slim
 
 
 def P_Net3(image_stack, disp_bottleneck_stack, joint_encoder, weight_reg=0.0004):
-    with tf.variable_scope('pose_net') as sc:
+    with tf.compat.v1.variable_scope('pose_net') as sc:
         end_points_collection = sc.original_name_scope + '_end_points'
         with slim.arg_scope([slim.conv2d, slim.conv2d_transpose],
                             normalizer_fn=None,
                             normalizer_params=None,
-                            weights_regularizer=slim.l2_regularizer(
-                                weight_reg),
+                            weights_regularizer=tf.keras.regularizers.l2(
+                                0.5 * (weight_reg)),
                             activation_fn=tf.nn.relu,
                             outputs_collections=end_points_collection):
             if not joint_encoder:
@@ -49,7 +49,7 @@ def P_Net3(image_stack, disp_bottleneck_stack, joint_encoder, weight_reg=0.0004)
                                     stride=1,
                                     normalizer_fn=None,
                                     activation_fn=None)
-            pose_avg = tf.reduce_mean(pose_pred, [1, 2])
+            pose_avg = tf.reduce_mean(input_tensor=pose_pred, axis=[1, 2])
             pose_final = tf.reshape(pose_avg, [-1, 1, 6*6])
 
             tran_mag = 0.001 if joint_encoder else 1.0

@@ -130,17 +130,17 @@ def flow_to_color(flow, mask=None, max_flow=None):
         mask: flow validity mask of shape [num_batch, height, width, 1].
     """
     n = 8
-    num_batch, height, width, _ = tf.unstack(tf.shape(flow))
+    num_batch, height, width, _ = tf.unstack(tf.shape(input=flow))
     mask = tf.ones([num_batch, height, width, 1]) if mask is None else mask
     flow_u, flow_v = tf.unstack(flow, axis=3)
     if max_flow is not None:
-        max_flow = tf.maximum(tf.to_float(max_flow), 1.)
+        max_flow = tf.maximum(tf.cast(max_flow, dtype=tf.float32), 1.)
     else:
-        max_flow = tf.reduce_max(tf.abs(flow * mask))
-    mag = tf.sqrt(tf.reduce_sum(tf.square(flow), 3))
+        max_flow = tf.reduce_max(input_tensor=tf.abs(flow * mask))
+    mag = tf.sqrt(tf.reduce_sum(input_tensor=tf.square(flow), axis=3))
     angle = tf.atan2(flow_v, flow_u)
 
-    im_h = tf.mod(angle / (2 * np.pi) + 1.0, 1.0)
+    im_h = tf.math.mod(angle / (2 * np.pi) + 1.0, 1.0)
     im_s = tf.clip_by_value(mag * n / max_flow, 0, 1)
     im_v = tf.clip_by_value(n - im_s, 0, 1)
     im_hsv = tf.stack([im_h, im_s, im_v], 3)

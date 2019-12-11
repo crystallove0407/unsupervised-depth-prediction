@@ -42,21 +42,21 @@ def transformerFwd(U,
     """
 
     def _repeat(x, n_repeats):
-        with tf.variable_scope('_repeat'):
+        with tf.compat.v1.variable_scope('_repeat'):
             rep = tf.transpose(
-                tf.expand_dims(
-                    tf.ones(shape=tf.stack([n_repeats, ])), 1), [1, 0])
+                a=tf.expand_dims(
+                    tf.ones(shape=tf.stack([n_repeats, ])), 1), perm=[1, 0])
             rep = tf.cast(rep, 'int32')
             x = tf.matmul(tf.reshape(x, (-1, 1)), rep)
             return tf.reshape(x, [-1])
 
     def _interpolate(im, x, y, out_size):
-        with tf.variable_scope('_interpolate'):
+        with tf.compat.v1.variable_scope('_interpolate'):
             # constants
-            num_batch = tf.shape(im)[0]
-            height = tf.shape(im)[1]
-            width = tf.shape(im)[2]
-            channels = tf.shape(im)[3]
+            num_batch = tf.shape(input=im)[0]
+            height = tf.shape(input=im)[1]
+            width = tf.shape(input=im)[2]
+            channels = tf.shape(input=im)[3]
 
             x = tf.cast(x, 'float32')
             y = tf.cast(y, 'float32')
@@ -65,8 +65,8 @@ def transformerFwd(U,
             out_height = out_size[0]
             out_width = out_size[1]
             zero = tf.zeros([], dtype='int32')
-            max_y = tf.cast(tf.shape(im)[1] - 1, 'int32')
-            max_x = tf.cast(tf.shape(im)[2] - 1, 'int32')
+            max_y = tf.cast(tf.shape(input=im)[1] - 1, 'int32')
+            max_x = tf.cast(tf.shape(input=im)[2] - 1, 'int32')
 
             # scale indices from [-1, 1] to [0, width/height]
             x = (x + 1.0) * (width_f - 1) / 2.0
@@ -111,16 +111,16 @@ def transformerFwd(U,
 
             zerof = tf.zeros_like(wa)
 
-            wa = tf.where(
+            wa = tf.compat.v1.where(
                 tf.logical_and(tf.equal(x0_c, x0), tf.equal(y0_c, y0)), wa,
                 zerof)
-            wb = tf.where(
+            wb = tf.compat.v1.where(
                 tf.logical_and(tf.equal(x0_c, x0), tf.equal(y1_c, y1)), wb,
                 zerof)
-            wc = tf.where(
+            wc = tf.compat.v1.where(
                 tf.logical_and(tf.equal(x1_c, x1), tf.equal(y0_c, y0)), wc,
                 zerof)
-            wd = tf.where(
+            wd = tf.compat.v1.where(
                 tf.logical_and(tf.equal(x1_c, x1), tf.equal(y1_c, y1)), wd,
                 zerof)
 
@@ -134,15 +134,15 @@ def transformerFwd(U,
                 output = tf.Variable(
                     zeros,
                     trainable=False,
-                    collections=[tf.GraphKeys.LOCAL_VARIABLES])
-                init = tf.assign(output, zeros)
+                    collections=[tf.compat.v1.GraphKeys.LOCAL_VARIABLES])
+                init = tf.compat.v1.assign(output, zeros)
 
                 # tf.scatter_add will not back-propagate gradients
                 with tf.control_dependencies([init]):
-                    output = tf.scatter_add(output, idx_a, im_flat * wa)
-                    output = tf.scatter_add(output, idx_b, im_flat * wb)
-                    output = tf.scatter_add(output, idx_c, im_flat * wc)
-                    output = tf.scatter_add(output, idx_d, im_flat * wd)
+                    output = tf.compat.v1.scatter_add(output, idx_a, im_flat * wa)
+                    output = tf.compat.v1.scatter_add(output, idx_b, im_flat * wb)
+                    output = tf.compat.v1.scatter_add(output, idx_c, im_flat * wc)
+                    output = tf.compat.v1.scatter_add(output, idx_d, im_flat * wd)
             else:
                 shape = [
                     int(im.get_shape()[0]) * int(im.get_shape()[1]) *
@@ -156,7 +156,7 @@ def transformerFwd(U,
             return output
 
     def _meshgrid(height, width):
-        with tf.variable_scope('_meshgrid'):
+        with tf.compat.v1.variable_scope('_meshgrid'):
             # This should be equivalent to:
             #  x_t, y_t = np.meshgrid(np.linspace(-1, 1, width),
             #                         np.linspace(-1, 1, height))
@@ -165,7 +165,7 @@ def transformerFwd(U,
             x_t = tf.matmul(
                 tf.ones(shape=tf.stack([height, 1])),
                 tf.transpose(
-                    tf.expand_dims(tf.linspace(-1.0, 1.0, width), 1), [1, 0]))
+                    a=tf.expand_dims(tf.linspace(-1.0, 1.0, width), 1), perm=[1, 0]))
             y_t = tf.matmul(
                 tf.expand_dims(tf.linspace(-1.0, 1.0, height), 1),
                 tf.ones(shape=tf.stack([1, width])))
@@ -173,11 +173,11 @@ def transformerFwd(U,
             return x_t, y_t
 
     def _transform(flo, input_dim, out_size):
-        with tf.variable_scope('_transform'):
-            num_batch = tf.shape(input_dim)[0]
-            height = tf.shape(input_dim)[1]
-            width = tf.shape(input_dim)[2]
-            num_channels = tf.shape(input_dim)[3]
+        with tf.compat.v1.variable_scope('_transform'):
+            num_batch = tf.shape(input=input_dim)[0]
+            height = tf.shape(input=input_dim)[1]
+            width = tf.shape(input=input_dim)[2]
+            num_channels = tf.shape(input=input_dim)[3]
 
             # grid of (x_t, y_t, 1), eq (1) in ref [1]
             height_f = tf.cast(height, 'float32')
@@ -205,14 +205,14 @@ def transformerFwd(U,
                 tf.stack([num_batch, out_height, out_width, num_channels]))
             return output
 
-    with tf.variable_scope(name):
+    with tf.compat.v1.variable_scope(name):
         output = _transform(flo, U, out_size)
         return output
 
 
 def main(unused_argv):
     # Some test cases
-    sess = tf.Session(config=tf.ConfigProto(
+    sess = tf.compat.v1.Session(config=tf.compat.v1.ConfigProto(
         allow_soft_placement=True, log_device_placement=False))
     #
     image = tf.constant(range(16), shape=[1, 4, 4, 1], dtype="float32")
@@ -224,11 +224,11 @@ def main(unused_argv):
     image2 = transformerFwd(image, flo, [4, 4])
 
     image2 = sess.run(image2)
-    loss = tf.reduce_mean(tf.abs(image2 - 1.0))
+    loss = tf.reduce_mean(input_tensor=tf.abs(image2 - 1.0))
 
-    var_grad = tf.gradients(loss, [flo])[0]
+    var_grad = tf.gradients(ys=loss, xs=[flo])[0]
 
-    sess.run(tf.global_variables_initializer())
+    sess.run(tf.compat.v1.global_variables_initializer())
     print(image2.eval(session=sess))
     pdb.set_trace()
 

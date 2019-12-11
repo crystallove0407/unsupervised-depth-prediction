@@ -13,18 +13,18 @@ def mean_squared_error(true, pred):
   Returns:
     mean squared error between ground truth and predicted image.
   """
-    return tf.reduce_sum(tf.square(true - pred)) / tf.to_float(tf.size(pred))
+    return tf.reduce_sum(input_tensor=tf.square(true - pred)) / tf.cast(tf.size(input=pred), dtype=tf.float32)
 
 # Crecit: https://github.com/simonmeister/UnFlow/blob/master/src/e2eflow/core/losses.py
 def ternary_loss(im1, im2_warped, valid_mask, max_distance=1):
     patch_size = 2*max_distance+1
-    with tf.variable_scope('ternary_loss'):
+    with tf.compat.v1.variable_scope('ternary_loss'):
         def _ternary_transform(image):
             intensities = tf.image.rgb_to_grayscale(image) * 255
             out_channels = patch_size * patch_size
             w = np.eye(out_channels).reshape((patch_size, patch_size, 1, out_channels))
             weights =  tf.constant(w, dtype=tf.float32)
-            patches = tf.nn.conv2d(intensities, weights, strides=[1, 1, 1, 1], padding='SAME')
+            patches = tf.nn.conv2d(input=intensities, filters=weights, strides=[1, 1, 1, 1], padding='SAME')
 
             transf = patches - intensities
             transf_norm = transf / tf.sqrt(0.81 + tf.square(transf))
@@ -33,7 +33,7 @@ def ternary_loss(im1, im2_warped, valid_mask, max_distance=1):
         def _hamming_distance(t1, t2):
             dist = tf.square(t1 - t2)
             dist_norm = dist / (0.1 + dist)
-            dist_sum = tf.reduce_sum(dist_norm, 3, keepdims=True)
+            dist_sum = tf.reduce_sum(input_tensor=dist_norm, axis=3, keepdims=True)
             return dist_sum
 
     t1 = _ternary_transform(im1)
@@ -44,13 +44,13 @@ def ternary_loss(im1, im2_warped, valid_mask, max_distance=1):
     return charbonnier_loss(dist, valid_mask * transform_mask), dist
 
 def create_mask(tensor, paddings):
-    with tf.variable_scope('create_mask'):
-        shape = tf.shape(tensor)
+    with tf.compat.v1.variable_scope('create_mask'):
+        shape = tf.shape(input=tensor)
         inner_width = shape[1] - (paddings[0][0] + paddings[0][1])
         inner_height = shape[2] - (paddings[1][0] + paddings[1][1])
         inner = tf.ones([inner_width, inner_height])
 
-        mask2d = tf.pad(inner, paddings)
+        mask2d = tf.pad(tensor=inner, paddings=paddings)
         mask3d = tf.tile(tf.expand_dims(mask2d, 0), [shape[0], 1, 1])
         mask4d = tf.expand_dims(mask3d, 3)
         return tf.stop_gradient(mask4d)
@@ -66,10 +66,10 @@ def weighted_mean_squared_error(true, pred, weight):
   """
 
     tmp = tf.reduce_sum(
-        weight * tf.square(true - pred), axis=[1, 2],
+        input_tensor=weight * tf.square(true - pred), axis=[1, 2],
         keepdims=True) / tf.reduce_sum(
-            weight, axis=[1, 2], keepdims=True)
-    return tf.reduce_mean(tmp)
+            input_tensor=weight, axis=[1, 2], keepdims=True)
+    return tf.reduce_mean(input_tensor=tmp)
 
 
 def mean_L1_error(true, pred):
@@ -81,7 +81,7 @@ def mean_L1_error(true, pred):
   Returns:
     mean squared error between ground truth and predicted image.
   """
-    return tf.reduce_sum(tf.abs(true - pred)) / tf.to_float(tf.size(pred))
+    return tf.reduce_sum(input_tensor=tf.abs(true - pred)) / tf.cast(tf.size(input=pred), dtype=tf.float32)
 
 
 def weighted_mean_L1_error(true, pred, weight):
@@ -93,8 +93,8 @@ def weighted_mean_L1_error(true, pred, weight):
   Returns:
     mean squared error between ground truth and predicted image.
   """
-    return tf.reduce_sum(tf.abs(true - pred) *
-                         weight) / tf.to_float(tf.size(pred))
+    return tf.reduce_sum(input_tensor=tf.abs(true - pred) *
+                         weight) / tf.cast(tf.size(input=pred), dtype=tf.float32)
 
 
 def cal_grad2_error(flo, image, beta):
@@ -109,16 +109,16 @@ def cal_grad2_error(flo, image, beta):
 
     img_grad_x, img_grad_y = gradient(image)
     weights_x = tf.exp(-10.0 * tf.reduce_mean(
-        tf.abs(img_grad_x), 3, keepdims=True))
+        input_tensor=tf.abs(img_grad_x), axis=3, keepdims=True))
     weights_y = tf.exp(-10.0 * tf.reduce_mean(
-        tf.abs(img_grad_y), 3, keepdims=True))
+        input_tensor=tf.abs(img_grad_y), axis=3, keepdims=True))
 
     dx, dy = gradient(flo)
     dx2, dxdy = gradient(dx)
     dydx, dy2 = gradient(dy)
 
-    return (tf.reduce_mean(beta*weights_x[:,:, 1:, :]*tf.abs(dx2)) + \
-           tf.reduce_mean(beta*weights_y[:, 1:, :, :]*tf.abs(dy2))) / 2.0
+    return (tf.reduce_mean(input_tensor=beta*weights_x[:,:, 1:, :]*tf.abs(dx2)) + \
+           tf.reduce_mean(input_tensor=beta*weights_y[:, 1:, :, :]*tf.abs(dy2))) / 2.0
 
 
 def cal_grad2_error_mask(flo, image, beta, mask):
@@ -134,16 +134,16 @@ def cal_grad2_error_mask(flo, image, beta, mask):
 
     img_grad_x, img_grad_y = gradient(image)
     weights_x = tf.exp(-10.0 * tf.reduce_mean(
-        tf.abs(img_grad_x), 3, keepdims=True))
+        input_tensor=tf.abs(img_grad_x), axis=3, keepdims=True))
     weights_y = tf.exp(-10.0 * tf.reduce_mean(
-        tf.abs(img_grad_y), 3, keepdims=True))
+        input_tensor=tf.abs(img_grad_y), axis=3, keepdims=True))
 
     dx, dy = gradient(flo)
     dx2, dxdy = gradient(dx)
     dydx, dy2 = gradient(dy)
 
-    return (tf.reduce_mean(beta*weights_x[:,:, 1:, :]*tf.abs(dx2) * mask[:, :, 1:-1, :]) + \
-           tf.reduce_mean(beta*weights_y[:, 1:, :, :]*tf.abs(dy2) * mask[:, 1:-1, :, :])) / 2.0
+    return (tf.reduce_mean(input_tensor=beta*weights_x[:,:, 1:, :]*tf.abs(dx2) * mask[:, :, 1:-1, :]) + \
+           tf.reduce_mean(input_tensor=beta*weights_y[:, 1:, :, :]*tf.abs(dy2) * mask[:, 1:-1, :, :])) / 2.0
 
 
 def compute_edge_aware_smooth_loss(pred_disp, img):
@@ -157,10 +157,10 @@ def compute_edge_aware_smooth_loss(pred_disp, img):
     img_dx, img_dy = gradient(img)
     disp_dx, disp_dy = gradient(pred_disp)
 
-    weight_x = tf.exp(-tf.reduce_mean(tf.abs(img_dx), 3, keepdims=True))
-    weight_y = tf.exp(-tf.reduce_mean(tf.abs(img_dy), 3, keepdims=True))
+    weight_x = tf.exp(-tf.reduce_mean(input_tensor=tf.abs(img_dx), axis=3, keepdims=True))
+    weight_y = tf.exp(-tf.reduce_mean(input_tensor=tf.abs(img_dy), axis=3, keepdims=True))
 
-    loss = tf.reduce_mean(weight_x*tf.abs(disp_dx)) + tf.reduce_mean(weight_y*tf.abs(disp_dy))
+    loss = tf.reduce_mean(input_tensor=weight_x*tf.abs(disp_dx)) + tf.reduce_mean(input_tensor=weight_y*tf.abs(disp_dy))
     return loss
 
 def gradient_x(img):
@@ -179,20 +179,20 @@ def depth_smoothness(depth, img):
     image_dy = gradient_y(img)
     # image_dx = tf.Print(image_dx, ["[!] image_dx: ", image_dx], summarize=100)
 
-    weights_x = tf.exp(-tf.reduce_mean(tf.abs(image_dx), 3, keepdims=True))
-    weights_y = tf.exp(-tf.reduce_mean(tf.abs(image_dy), 3, keepdims=True))
+    weights_x = tf.exp(-tf.reduce_mean(input_tensor=tf.abs(image_dx), axis=3, keepdims=True))
+    weights_y = tf.exp(-tf.reduce_mean(input_tensor=tf.abs(image_dy), axis=3, keepdims=True))
     # weights_x = tf.Print(weights_x, ["[!] weights_x: ", weights_x], summarize=100)
     smoothness_x = depth_dx * weights_x
     smoothness_y = depth_dy * weights_y
-    return tf.reduce_mean(abs(smoothness_x)) + tf.reduce_mean(abs(smoothness_y))
+    return tf.reduce_mean(input_tensor=abs(smoothness_x)) + tf.reduce_mean(input_tensor=abs(smoothness_y))
 
 def SSIM(x, y):
     C1 = 0.01**2
     C2 = 0.03**2
 
     default_pad = tf.constant([[0, 0], [1, 1], [1, 1], [0, 0]])
-    x = tf.pad(x, default_pad, mode='REFLECT')
-    y = tf.pad(y, default_pad, mode='REFLECT')
+    x = tf.pad(tensor=x, paddings=default_pad, mode='REFLECT')
+    y = tf.pad(tensor=y, paddings=default_pad, mode='REFLECT')
 
     mu_x = slim.avg_pool2d(x, 3, 1, 'VALID')
     mu_y = slim.avg_pool2d(y, 3, 1, 'VALID')
@@ -224,7 +224,7 @@ def charbonnier_loss(x,
     Returns:
         loss as tf.float32
     """
-    batch, height, width, channels = tf.unstack(tf.shape(x))
+    batch, height, width, channels = tf.unstack(tf.shape(input=x))
     normalization = tf.cast(batch * height * width * channels, tf.float32)
 
     error = tf.pow(tf.square(x * beta) + tf.square(epsilon), alpha)
@@ -235,4 +235,4 @@ def charbonnier_loss(x,
     if truncate is not None:
         error = tf.minimum(error, truncate)
 
-    return tf.reduce_sum(error) / normalization
+    return tf.reduce_sum(input_tensor=error) / normalization

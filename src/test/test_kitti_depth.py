@@ -29,10 +29,10 @@ def test_kitti_depth(data_list_file, img_dir, height, width, restore_dp_model, s
                            img_dir=img_dir)
     iterator = dataset.create_one_shot_iterator_depth_kitti(dataset.data_list, num_parallel_calls=num_input_threads)
     img1 = iterator.get_next()
-    img1 = tf.image.resize_images(img1, [height, width], method=0)
+    img1 = tf.image.resize(img1, [height, width], method=0)
     img1 = preprocess_image(img1)
 
-    with tf.variable_scope(tf.get_variable_scope()) as vs:
+    with tf.compat.v1.variable_scope(tf.compat.v1.get_variable_scope()) as vs:
         pred_disp_1, _ = D_Net(img1, is_training=False, reuse=False)
         pred_depth_1 = [1./disp for disp in pred_disp_1]
         pred_depth_1 = pred_depth_1[0]
@@ -40,23 +40,23 @@ def test_kitti_depth(data_list_file, img_dir, height, width, restore_dp_model, s
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    restore_vars = tf.trainable_variables()
+    restore_vars = tf.compat.v1.trainable_variables()
     # Add batchnorm variables.
-    bn_vars = [v for v in tf.global_variables()
+    bn_vars = [v for v in tf.compat.v1.global_variables()
                if 'moving_mean' in v.op.name or 'moving_variance' in v.op.name or
                'mu' in v.op.name or 'sigma' in v.op.name]
     restore_vars.extend(bn_vars)
 
     # restore_vars = [var for var in tf.trainable_variables()]
     print('[Info] Restoring model:', restore_dp_model)
-    saver = tf.train.Saver(max_to_keep=1)
+    saver = tf.compat.v1.train.Saver(max_to_keep=1)
 
     # for var in tf.trainable_variables():
     #     print(var.name)
 
     init_assign_op, init_feed_dict = slim.assign_from_checkpoint(restore_dp_model, restore_vars)
 
-    sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True, log_device_placement=False))
+    sess = tf.compat.v1.Session(config=tf.compat.v1.ConfigProto(allow_soft_placement=True, log_device_placement=False))
     # sess.run(tf.global_variables_initializer())
     # sess.run(tf.local_variables_initializer())
     sess.run(iterator.initializer)

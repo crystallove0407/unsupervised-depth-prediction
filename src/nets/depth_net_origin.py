@@ -32,13 +32,13 @@ def build_vgg(inputs, get_pred, is_training, var_scope, reuse=False):
     batch_norm_params = {'is_training': is_training}
     H = inputs.get_shape()[1].value
     W = inputs.get_shape()[2].value
-    with tf.variable_scope(var_scope) as sc:
+    with tf.compat.v1.variable_scope(var_scope) as sc:
         if reuse:
             sc.reuse_variables()
         with slim.arg_scope([slim.conv2d, slim.conv2d_transpose],
                             normalizer_fn=slim.batch_norm,
                             normalizer_params=batch_norm_params,
-                            weights_regularizer=slim.l2_regularizer(0.0001),
+                            weights_regularizer=tf.keras.regularizers.l2(0.5 * (0.0001)),
                             activation_fn=tf.nn.elu):
             # ENCODING
             conv1  = slim.conv2d(inputs, 32,  7, 2)
@@ -89,7 +89,7 @@ def build_vgg(inputs, get_pred, is_training, var_scope, reuse=False):
             i4_in  = tf.concat([upconv4, conv3b], axis=3)
             iconv4  = slim.conv2d(i4_in, 128, 3, 1)
             pred4  = get_pred(iconv4)
-            pred4_up = tf.image.resize_bilinear(pred4, [np.int(H/4), np.int(W/4)])
+            pred4_up = tf.image.resize(pred4, [np.int(H/4), np.int(W/4)], method=tf.image.ResizeMethod.BILINEAR)
             #
             # print("[upconv4]:", upconv4)
             # print("[i4_in]:", i4_in)
@@ -101,7 +101,7 @@ def build_vgg(inputs, get_pred, is_training, var_scope, reuse=False):
             i3_in  = tf.concat([upconv3, conv2b, pred4_up], axis=3)
             iconv3  = slim.conv2d(i3_in, 64,  3, 1)
             pred3  = get_pred(iconv3)
-            pred3_up = tf.image.resize_bilinear(pred3, [np.int(H/2), np.int(W/2)])
+            pred3_up = tf.image.resize(pred3, [np.int(H/2), np.int(W/2)], method=tf.image.ResizeMethod.BILINEAR)
             # print("[upconv3]:", upconv3)
             # print("[i3_in]:", i3_in)
             # print("[iconv3]:", iconv3)
@@ -112,7 +112,7 @@ def build_vgg(inputs, get_pred, is_training, var_scope, reuse=False):
             i2_in  = tf.concat([upconv2, conv1b, pred3_up], axis=3)
             iconv2  = slim.conv2d(i2_in, 32,  3, 1)
             pred2  = get_pred(iconv2)
-            pred2_up = tf.image.resize_bilinear(pred2, [H, W])
+            pred2_up = tf.image.resize(pred2, [H, W], method=tf.image.ResizeMethod.BILINEAR)
             # print("[upconv2]:", upconv2)
             # print("[i2_in]:", i2_in)
             # print("[iconv2]:", iconv2)
@@ -154,7 +154,7 @@ def build_resnet18(inputs, is_training, var_scope, reuse=False, weight_reg=0.000
       size [B, h_hid, w_hid, c_hid], and others being intermediate layers
       for building skip-connections.
     """
-    with tf.variable_scope(var_scope) as sc:
+    with tf.compat.v1.variable_scope(var_scope) as sc:
         if reuse:
             sc.reuse_variables()
         bottleneck, skip_connections = resnet18_encoder(inputs, is_training)
@@ -172,11 +172,11 @@ def resnet18_encoder(target_image, is_training):
     stride = 2
 
     # conv1
-    with tf.variable_scope('conv1'):
+    with tf.compat.v1.variable_scope('conv1'):
         x = _conv(target_image, 7, encoder_filters[0], stride)
         x = _bn(x, is_train=is_training)
         econv1 = _relu(x)
-        x = tf.nn.max_pool(econv1, [1, 3, 3, 1], [1, 2, 2, 1], 'SAME')
+        x = tf.nn.max_pool2d(input=econv1, ksize=[1, 3, 3, 1], strides=[1, 2, 2, 1], padding='SAME')
 
     # conv2_x
     x = _residual_block(x, is_training, name='conv2_1')
@@ -202,7 +202,7 @@ def resnet18_decoder(target_image, bottleneck, use_skip, skip_connections, weigh
     (econv4, econv3, econv2, econv1) = skip_connections
     decoder_filters = [16, 32, 64, 128, 256]
     default_pad = tf.constant([[0, 0], [1, 1], [1, 1], [0, 0]])
-    reg = slim.l2_regularizer(weight_reg) if weight_reg > 0.0 else None
+    reg = tf.keras.regularizers.l2(0.5 * (weight_reg)) if weight_reg > 0.0 else None
     with slim.arg_scope([slim.conv2d, slim.conv2d_transpose],
                         normalizer_fn=None,
                         normalizer_params=None,
@@ -216,7 +216,7 @@ def resnet18_decoder(target_image, bottleneck, use_skip, skip_connections, weigh
             i5_in = tf.concat([upconv5, econv4], axis=3)
         else:
             i5_in = upconv5
-        i5_in = tf.pad(i5_in, default_pad, mode='REFLECT')
+        i5_in = tf.pad(tensor=i5_in, paddings=default_pad, mode='REFLECT')
         iconv5 = slim.conv2d(i5_in, decoder_filters[4], [3, 3], stride=1,
                              scope='iconv5', padding='VALID')
 
@@ -227,11 +227,11 @@ def resnet18_decoder(target_image, bottleneck, use_skip, skip_connections, weigh
             i4_in = tf.concat([upconv4, econv3], axis=3)
         else:
             i4_in = upconv4
-        i4_in = tf.pad(i4_in, default_pad, mode='REFLECT')
+        i4_in = tf.pad(tensor=i4_in, paddings=default_pad, mode='REFLECT')
         iconv4 = slim.conv2d(i4_in, decoder_filters[3], [3, 3], stride=1,
                              scope='iconv4', padding='VALID')
 
-        disp4_input = tf.pad(iconv4, default_pad, mode='REFLECT')
+        disp4_input = tf.pad(tensor=iconv4, paddings=default_pad, mode='REFLECT')
         disp4 = (slim.conv2d(disp4_input, 1, [3, 3], stride=1,
                              activation_fn=tf.sigmoid, normalizer_fn=None,
                              scope='disp4', padding='VALID')
@@ -246,10 +246,10 @@ def resnet18_decoder(target_image, bottleneck, use_skip, skip_connections, weigh
             i3_in = tf.concat([upconv3, econv2], axis=3)
         else:
             i3_in = upconv3
-        i3_in = tf.pad(i3_in, default_pad, mode='REFLECT')
+        i3_in = tf.pad(tensor=i3_in, paddings=default_pad, mode='REFLECT')
         iconv3 = slim.conv2d(i3_in, decoder_filters[2], [3, 3], stride=1,
                              scope='iconv3', padding='VALID')
-        disp3_input = tf.pad(iconv3, default_pad, mode='REFLECT')
+        disp3_input = tf.pad(tensor=iconv3, paddings=default_pad, mode='REFLECT')
         disp3 = (slim.conv2d(disp3_input, 1, [3, 3], stride=1,
                              activation_fn=tf.sigmoid, normalizer_fn=None,
                              scope='disp3', padding='VALID')
@@ -262,10 +262,10 @@ def resnet18_decoder(target_image, bottleneck, use_skip, skip_connections, weigh
             i2_in = tf.concat([upconv2, econv1], axis=3)
         else:
             i2_in = upconv2
-        i2_in = tf.pad(i2_in, default_pad, mode='REFLECT')
+        i2_in = tf.pad(tensor=i2_in, paddings=default_pad, mode='REFLECT')
         iconv2 = slim.conv2d(i2_in, decoder_filters[1], [3, 3], stride=1,
                              scope='iconv2', padding='VALID')
-        disp2_input = tf.pad(iconv2, default_pad, mode='REFLECT')
+        disp2_input = tf.pad(tensor=iconv2, paddings=default_pad, mode='REFLECT')
         disp2 = (slim.conv2d(disp2_input, 1, [3, 3], stride=1,
                              activation_fn=tf.sigmoid, normalizer_fn=None,
                              scope='disp2', padding='VALID')
@@ -274,10 +274,10 @@ def resnet18_decoder(target_image, bottleneck, use_skip, skip_connections, weigh
         upconv1 = slim.conv2d_transpose(iconv2, decoder_filters[0], [3, 3],
                                         stride=2, scope='upconv1')
         upconv1 = _resize_like(upconv1, target_image)
-        upconv1 = tf.pad(upconv1, default_pad, mode='REFLECT')
+        upconv1 = tf.pad(tensor=upconv1, paddings=default_pad, mode='REFLECT')
         iconv1 = slim.conv2d(upconv1, decoder_filters[0], [3, 3], stride=1,
                              scope='iconv1', padding='VALID')
-        disp1_input = tf.pad(iconv1, default_pad, mode='REFLECT')
+        disp1_input = tf.pad(tensor=iconv1, paddings=default_pad, mode='REFLECT')
         disp1 = (slim.conv2d(disp1_input, 1, [3, 3], stride=1,
                              activation_fn=tf.sigmoid, normalizer_fn=None,
                              scope='disp1', padding='VALID')
@@ -290,14 +290,14 @@ def resnet18_decoder(target_image, bottleneck, use_skip, skip_connections, weigh
 def _residual_block_first(x, is_training, out_channel, strides, name='unit'):
     """Helper function for defining ResNet architecture."""
     in_channel = x.get_shape().as_list()[-1]
-    with tf.variable_scope(name):
+    with tf.compat.v1.variable_scope(name):
         # Shortcut connection
         if in_channel == out_channel:
             if strides == 1:
                 shortcut = tf.identity(x)
             else:
-                shortcut = tf.nn.max_pool(x, [1, strides, strides, 1],
-                                      [1, strides, strides, 1], 'VALID')
+                shortcut = tf.nn.max_pool2d(input=x, ksize=[1, strides, strides, 1],
+                                      strides=[1, strides, strides, 1], padding='VALID')
         else:
             shortcut = _conv(x, 1, out_channel, strides, name='shortcut')
         # Residual
@@ -314,7 +314,7 @@ def _residual_block_first(x, is_training, out_channel, strides, name='unit'):
 def _residual_block(x, is_training, input_q=None, output_q=None, name='unit'):
     """Helper function for defining ResNet architecture."""
     num_channel = x.get_shape().as_list()[-1]
-    with tf.variable_scope(name):
+    with tf.compat.v1.variable_scope(name):
         shortcut = x  # Shortcut connection
         # Residual
         x = _conv(x, 3, num_channel, 1, input_q=input_q, output_q=output_q,
@@ -335,21 +335,21 @@ def _conv(x, filter_size, out_channel, stride, pad='SAME', input_q=None, output_
         raise ValueError('Input/Output splits are not correctly given.')
 
     in_shape = x.get_shape()
-    with tf.variable_scope(name):
+    with tf.compat.v1.variable_scope(name):
         # Main operation: conv2d
         with tf.device('/CPU:0'):
-            kernel = tf.get_variable(
+            kernel = tf.compat.v1.get_variable(
                 'kernel', [filter_size, filter_size, in_shape[3], out_channel],
-                tf.float32, initializer=tf.random_normal_initializer(
+                tf.float32, initializer=tf.compat.v1.random_normal_initializer(
                 stddev=np.sqrt(2.0/filter_size/filter_size/out_channel)))
-        if kernel not in tf.get_collection(WEIGHT_DECAY_KEY):
-            tf.add_to_collection(WEIGHT_DECAY_KEY, kernel)
-        conv = tf.nn.conv2d(x, kernel, [1, stride, stride, 1], pad)
+        if kernel not in tf.compat.v1.get_collection(WEIGHT_DECAY_KEY):
+            tf.compat.v1.add_to_collection(WEIGHT_DECAY_KEY, kernel)
+        conv = tf.nn.conv2d(input=x, filters=kernel, strides=[1, stride, stride, 1], padding=pad)
     return conv
 
 def _bn(x, is_train, name='bn'):
     """Helper function for defining ResNet architecture."""
-    bn = tf.layers.batch_normalization(x, training=is_train, name=name)
+    bn = tf.compat.v1.layers.batch_normalization(x, training=is_train, name=name)
     return bn
 
 def _relu(x, name=None, leakness=0.0):
@@ -368,21 +368,21 @@ def _resize_like(inputs, ref):
         return inputs
     else:
         # TODO(casser): Other interpolation methods could be explored here.
-        return tf.image.resize_bilinear(inputs, [r_h.value, r_w.value],
-                                        align_corners=True)
+        return tf.image.resize(inputs, [r_h.value, r_w.value],
+                                        method=tf.image.ResizeMethod.BILINEAR)
 
 ######################################
 # Resnet50
 ######################################
 def build_resnet50(inputs, get_pred, is_training, var_scope, weight_reg=0.0001, reuse=False):
     batch_norm_params = {'is_training': is_training}
-    with tf.variable_scope(var_scope) as sc:
+    with tf.compat.v1.variable_scope(var_scope) as sc:
         if reuse:
             sc.reuse_variables()
         with slim.arg_scope([slim.conv2d, slim.conv2d_transpose],
                             normalizer_fn=slim.batch_norm,
                             normalizer_params=batch_norm_params,
-                            weights_regularizer=slim.l2_regularizer(weight_reg),
+                            weights_regularizer=tf.keras.regularizers.l2(0.5 * (weight_reg)),
                             activation_fn=tf.nn.elu):
             conv1 = conv(inputs, 64, 7, 2)      # H/2  -   64D
             pool1 = maxpool(conv1,           3) # H/4  -   64D
@@ -449,7 +449,7 @@ def resblock(x, num_layers, num_blocks):
 def resconv(x, num_layers, stride):
     # Actually here exists a bug: tf.shape(x)[3] != num_layers is always true,
     # but we preserve it here for consistency with Godard's implementation.
-    do_proj = tf.shape(x)[3] != num_layers or stride == 2
+    do_proj = tf.shape(input=x)[3] != num_layers or stride == 2
     shortcut = []
     conv1 = conv(x,         num_layers, 1, 1)
     conv2 = conv(conv1,     num_layers, 3, stride)
@@ -462,7 +462,7 @@ def resconv(x, num_layers, stride):
 
 def maxpool(x, kernel_size):
     p = np.floor((kernel_size - 1) / 2).astype(np.int32)
-    p_x = tf.pad(x, [[0, 0], [p, p], [p, p], [0, 0]], mode='REFLECT')
+    p_x = tf.pad(tensor=x, paddings=[[0, 0], [p, p], [p, p], [0, 0]], mode='REFLECT')
     return slim.max_pool2d(p_x, kernel_size)
 
 ######################################
@@ -498,18 +498,18 @@ class ShuffleNetV2_shuffle():
 
 
     def build_model(self):
-        with tf.variable_scope(self.var_scope) as sc:
+        with tf.compat.v1.variable_scope(self.var_scope) as sc:
             with slim.arg_scope([slim.batch_norm], is_training=self.is_training):
                 skip = []
-                with tf.variable_scope('encoder'):
-                    with tf.variable_scope('init_block'):
+                with tf.compat.v1.variable_scope('encoder'):
+                    with tf.compat.v1.variable_scope('init_block'):
                         out = conv_bn_relu(self.input, self.first_conv_channel, 3, 2)
                         skip.append(out)
                         out = slim.max_pool2d(skip[0], 3, 2, padding='SAME')
                         skip.append(out)
                         
                     for idx, block in enumerate(self.channel_sizes[:-1]):
-                        with tf.variable_scope('shuffle_block_{}'.format(idx)):
+                        with tf.compat.v1.variable_scope('shuffle_block_{}'.format(idx)):
                             out_channel, repeat = block
 
                             # First block is downsampling
@@ -524,13 +524,13 @@ class ShuffleNetV2_shuffle():
                             skip.append(out)
 
 
-                    with tf.variable_scope('end_block'):
+                    with tf.compat.v1.variable_scope('end_block'):
                         out = conv_bn_relu(out, self.channel_sizes[-1][0], 1)
 
                 for idx, sk in enumerate(skip):
                     print("skip[%d]:" % idx, sk.shape)
                     
-                with tf.variable_scope('decoder'):
+                with tf.compat.v1.variable_scope('decoder'):
                     # DECODER
                     pred = []
                     x = out
@@ -554,69 +554,69 @@ class ShuffleNetV2_shuffle():
         return pred[::-1], out
 
 def shuffle_unit(x, groups):
-    with tf.variable_scope('shuffle_unit'):
+    with tf.compat.v1.variable_scope('shuffle_unit'):
         n, h, w, c = x.get_shape().as_list()
-        x = tf.reshape(x, shape=tf.convert_to_tensor([tf.shape(x)[0], h, w, groups, c // groups]))
-        x = tf.transpose(x, tf.convert_to_tensor([0, 1, 2, 4, 3]))
-        x = tf.reshape(x, shape=tf.convert_to_tensor([tf.shape(x)[0], h, w, c]))
+        x = tf.reshape(x, shape=tf.convert_to_tensor(value=[tf.shape(input=x)[0], h, w, groups, c // groups]))
+        x = tf.transpose(a=x, perm=tf.convert_to_tensor(value=[0, 1, 2, 4, 3]))
+        x = tf.reshape(x, shape=tf.convert_to_tensor(value=[tf.shape(input=x)[0], h, w, c]))
     return x
 
 def conv_bn_relu(x, out_channel, kernel_size, stride=1, dilation=1):
-    with tf.variable_scope(None, 'conv_bn_relu'):
+    with tf.compat.v1.variable_scope(None, 'conv_bn_relu'):
         x = slim.conv2d(x, out_channel, kernel_size, stride, rate=dilation,
                         biases_initializer=None, activation_fn=None)
         x = slim.batch_norm(x, activation_fn=tf.nn.relu, fused=False)
     return x
 
 def conv_bn(x, out_channel, kernel_size, stride=1, dilation=1):
-    with tf.variable_scope(None, 'conv_bn'):
+    with tf.compat.v1.variable_scope(None, 'conv_bn'):
         x = slim.conv2d(x, out_channel, kernel_size, stride, rate=dilation,
                         biases_initializer=None, activation_fn=None)
         x = slim.batch_norm(x, activation_fn=None, fused=False)
     return x
 
 def depthwise_conv_bn(x, kernel_size, stride=1, dilation=1, depthType='sep'):
-    with tf.variable_scope(None, 'depthwise_conv_bn'):
+    with tf.compat.v1.variable_scope(None, 'depthwise_conv_bn'):
         n, h, w, c = x.get_shape().as_list()
         if depthType == 'sep':
             x = slim.separable_conv2d(x, None, kernel_size, depth_multiplier=1, stride=stride,
                                   rate=dilation, activation_fn=None, biases_initializer=None)
         elif depthType == 'dep':
-            w = tf.get_variable('w', [3, 3, c, 1], dtype=tf.float32, 
-                            initializer=tf.truncated_normal_initializer(stddev=0.02))
-            x = tf.nn.depthwise_conv2d(x, w, strides=[1,1,1,1], padding='SAME', rate=None,name=None)
+            w = tf.compat.v1.get_variable('w', [3, 3, c, 1], dtype=tf.float32, 
+                            initializer=tf.compat.v1.truncated_normal_initializer(stddev=0.02))
+            x = tf.nn.depthwise_conv2d(input=x, filter=w, strides=[1,1,1,1], padding='SAME', dilations=None,name=None)
 
         elif depthType == 'combine':
             if (c >= 512) or (c < 512 and h < 128):
                 x = slim.separable_conv2d(x, None, kernel_size, depth_multiplier=1, stride=stride,
                                   rate=dilation, activation_fn=None, biases_initializer=None)
             else:
-                w = tf.get_variable('w', [3, 3, c, 1], dtype=tf.float32, 
-                                initializer=tf.truncated_normal_initializer(stddev=0.02))
-                x = tf.nn.depthwise_conv2d(x, w, strides=[1,1,1,1], padding='SAME', rate=None,name=None)
+                w = tf.compat.v1.get_variable('w', [3, 3, c, 1], dtype=tf.float32, 
+                                initializer=tf.compat.v1.truncated_normal_initializer(stddev=0.02))
+                x = tf.nn.depthwise_conv2d(input=x, filter=w, strides=[1,1,1,1], padding='SAME', dilations=None,name=None)
 
             
         x = slim.batch_norm(x, activation_fn=None, fused=False)
     return x
 
 def resolve_shape(x):
-    with tf.variable_scope(None, 'resolve_shape'):
+    with tf.compat.v1.variable_scope(None, 'resolve_shape'):
         n, h, w, c = x.get_shape().as_list()
         if h is None or w is None:
-            kernel_size = tf.convert_to_tensor([tf.shape(x)[1], tf.shape(x)[2]])
+            kernel_size = tf.convert_to_tensor(value=[tf.shape(input=x)[1], tf.shape(input=x)[2]])
         else:
             kernel_size = [h, w]
     return kernel_size
 
 def global_avg_pool2D(x):
-    with tf.variable_scope(None, 'global_pool2D'):
+    with tf.compat.v1.variable_scope(None, 'global_pool2D'):
         kernel_size = resolve_shape(x)
         x = slim.avg_pool2d(x, kernel_size, stride=1)
         x.set_shape([None, 1, 1, None])
     return x
 
 def se_unit(x, bottleneck=2):
-    with tf.variable_scope(None, 'SE_module'):
+    with tf.compat.v1.variable_scope(None, 'SE_module'):
         n, h, w, c = x.get_shape().as_list()
 
         kernel_size = resolve_shape(x)
@@ -627,7 +627,7 @@ def se_unit(x, bottleneck=2):
         fc = slim.fully_connected(fc, c, activation_fn=tf.nn.sigmoid,
                                   biases_initializer=None)
         if n is None:
-            channel_w = tf.reshape(fc, shape=tf.convert_to_tensor([tf.shape(x)[0], 1, 1, c]))
+            channel_w = tf.reshape(fc, shape=tf.convert_to_tensor(value=[tf.shape(input=x)[0], 1, 1, c]))
         else:
             channel_w = tf.reshape(fc, shape=[n, 1, 1, c])
 
@@ -635,7 +635,7 @@ def se_unit(x, bottleneck=2):
     return x
 
 def shufflenet_v2_block(x, out_channel, kernel_size, stride=1, dilation=1, shuffle_group=2, depthType='sep'):
-    with tf.variable_scope(None, 'shuffle_v2_block'):
+    with tf.compat.v1.variable_scope(None, 'shuffle_v2_block'):
         if stride == 1 and x.shape[-1] == out_channel:
             top, bottom = tf.split(x, num_or_size_splits=2, axis=3)
 
@@ -672,7 +672,7 @@ def get_pred(x):
 
 def conv(x, num_out_layers, kernel_size, stride, activation_fn=tf.nn.elu, normalizer_fn=slim.batch_norm):
     p = np.floor((kernel_size - 1) / 2).astype(np.int32)
-    p_x = tf.pad(x, [[0, 0], [p, p], [p, p], [0, 0]], mode='REFLECT')
+    p_x = tf.pad(tensor=x, paddings=[[0, 0], [p, p], [p, p], [0, 0]], mode='REFLECT')
     return slim.conv2d(p_x, num_out_layers, kernel_size, stride, 'VALID', activation_fn=activation_fn, normalizer_fn=normalizer_fn)
 
 
@@ -681,7 +681,7 @@ def resize_like(inputs, ref):
     rH, rW = ref.get_shape()[1], ref.get_shape()[2]
     if iH == rH and iW == rW:
         return inputs
-    return tf.image.resize_nearest_neighbor(inputs, [rH.value, rW.value])
+    return tf.image.resize(inputs, [rH.value, rW.value], method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
 
 
 def upconv(x, num_out_layers, kernel_size, scale):
@@ -697,7 +697,7 @@ def upconv_sep(x, num_out_layers, kernel_size, scale):
 def upsample_nn(x, ratio):
     h = x.get_shape()[1].value
     w = x.get_shape()[2].value
-    return tf.image.resize_nearest_neighbor(x, [h * ratio, w * ratio])
+    return tf.image.resize(x, [h * ratio, w * ratio], method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
 
 
 ########################################################
@@ -732,18 +732,18 @@ class ShuffleNetV2_mobile():
 
 
     def build_model(self):
-        with tf.variable_scope(self.var_scope) as sc:
+        with tf.compat.v1.variable_scope(self.var_scope) as sc:
             with slim.arg_scope([slim.batch_norm], is_training=self.is_training):
                 skip = []
-                with tf.variable_scope('encoder'):
-                    with tf.variable_scope('init_block'):
+                with tf.compat.v1.variable_scope('encoder'):
+                    with tf.compat.v1.variable_scope('init_block'):
                         out = conv_bn_relu(self.input, self.first_conv_channel, 3, 2)
                         skip.append(out)
                         out = slim.max_pool2d(skip[0], 3, 2, padding='SAME')
                         skip.append(out)
                         
                     for idx, block in enumerate(self.channel_sizes[:-1]):
-                        with tf.variable_scope('shuffle_block_{}'.format(idx)):
+                        with tf.compat.v1.variable_scope('shuffle_block_{}'.format(idx)):
                             out_channel, repeat = block
 
                             # First block is downsampling
@@ -758,13 +758,13 @@ class ShuffleNetV2_mobile():
                             skip.append(out)
 
 
-                    with tf.variable_scope('end_block'):
+                    with tf.compat.v1.variable_scope('end_block'):
                         out = conv_bn_relu(out, self.channel_sizes[-1][0], 1)
 
                 for idx, sk in enumerate(skip):
                     print("skip[%d]:" % idx, sk.shape)
                     
-                with tf.variable_scope('decoder'):
+                with tf.compat.v1.variable_scope('decoder'):
                     # DECODER
                     pred = []
                     x = out
@@ -788,7 +788,7 @@ class ShuffleNetV2_mobile():
 
     
 def dec_block(input_tensor, output_channel, scope = None, depthType='sep', depthBlock='separable'):
-    with tf.variable_scope(scope, default_name='separable_conv'):
+    with tf.compat.v1.variable_scope(scope, default_name='separable_conv'):
         input_tensor = tf.identity(input_tensor, name='input')
         net = input_tensor
         
@@ -823,16 +823,16 @@ def dec_block(input_tensor, output_channel, scope = None, depthType='sep', depth
     
 def dwise_conv(input, k_h=3, k_w=3, channel_multiplier= 1, strides=[1,1,1,1],
                padding='SAME', stddev=0.02, name='dwise_conv'):
-    with tf.variable_scope(name):
+    with tf.compat.v1.variable_scope(name):
         in_channel=input.get_shape().as_list()[-1]
-        w = tf.get_variable('w', [k_h, k_w, in_channel, channel_multiplier], dtype=tf.float32, 
-                        initializer=tf.truncated_normal_initializer(stddev=stddev))
-        conv = tf.nn.depthwise_conv2d(input, w, strides, padding, rate=None,name=None,data_format=None)
+        w = tf.compat.v1.get_variable('w', [k_h, k_w, in_channel, channel_multiplier], dtype=tf.float32, 
+                        initializer=tf.compat.v1.truncated_normal_initializer(stddev=stddev))
+        conv = tf.nn.depthwise_conv2d(input=input, filter=w, strides=strides, padding=padding, dilations=None,name=None,data_format=None)
 
     return conv
 
 def dwise_combine(input, name='dwise_combine'):
-    with tf.variable_scope(name):
+    with tf.compat.v1.variable_scope(name):
         n, h, w, c = input.get_shape().as_list()
         if (c >= 512) or (c < 512 and h < 128):
             return dwise_conv(input)
@@ -879,18 +879,18 @@ class ShuffleNetV2_separable():
 
 
     def build_model(self):
-        with tf.variable_scope(self.var_scope) as sc:
+        with tf.compat.v1.variable_scope(self.var_scope) as sc:
             with slim.arg_scope([slim.batch_norm], is_training=self.is_training):
                 skip = []
-                with tf.variable_scope('encoder'):
-                    with tf.variable_scope('init_block'):
+                with tf.compat.v1.variable_scope('encoder'):
+                    with tf.compat.v1.variable_scope('init_block'):
                         out = conv_bn_relu(self.input, self.first_conv_channel, 3, 2)
                         skip.append(out)
                         out = slim.max_pool2d(skip[0], 3, 2, padding='SAME')
                         skip.append(out)
                         
                     for idx, block in enumerate(self.channel_sizes[:-1]):
-                        with tf.variable_scope('shuffle_block_{}'.format(idx)):
+                        with tf.compat.v1.variable_scope('shuffle_block_{}'.format(idx)):
                             out_channel, repeat = block
 
                             # First block is downsampling
@@ -905,13 +905,13 @@ class ShuffleNetV2_separable():
                             skip.append(out)
 
 
-                    with tf.variable_scope('end_block'):
+                    with tf.compat.v1.variable_scope('end_block'):
                         out = conv_bn_relu(out, self.channel_sizes[-1][0], 1)
 
                 for idx, sk in enumerate(skip):
                     print("skip[%d]:" % idx, sk.shape)
                     
-                with tf.variable_scope('decoder'):
+                with tf.compat.v1.variable_scope('decoder'):
                     # DECODER
                     pred = []
                     x = out

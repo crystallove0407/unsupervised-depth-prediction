@@ -1,4 +1,5 @@
 import tensorflow as tf
+import tensorflow_probability as tfp
 import numpy as np
 import matplotlib.pyplot as plt
 from absl import logging
@@ -8,7 +9,7 @@ def get_shape(x, train=True):
     if train:
         x_shape = x.get_shape().as_list()
     else:
-        x_shape = tf.shape(x)
+        x_shape = tf.shape(input=x)
     return x_shape
 
 def resize_like(inputs, ref, type='nearest'):
@@ -23,9 +24,9 @@ def resize_like(inputs, ref, type='nearest'):
     if iH == rH and iW == rW:
         return inputs
     if type == 'nearest':
-        return tf.image.resize_nearest_neighbor(inputs, [rH, rW])
+        return tf.image.resize(inputs, [rH, rW], method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
     elif type == 'bilinear':
-        return tf.image.resize_bilinear(inputs, [rH, rW])
+        return tf.image.resize(inputs, [rH, rW], method=tf.image.ResizeMethod.BILINEAR)
         # [TODO]: find the effect of "align_corners"
         # return tf.image.resize_bilinear(inputs, [rH, rW], align_corners=True)
 
@@ -84,12 +85,12 @@ def rgb_bgr(img):
 def compute_Fl(flow_gt, flow_est, mask):
     # F1 measure
     err = tf.multiply(flow_gt - flow_est, mask)
-    err_norm = tf.norm(err, axis=-1)
+    err_norm = tf.norm(tensor=err, axis=-1)
 
-    flow_gt_norm = tf.maximum(tf.norm(flow_gt, axis=-1), 1e-12)
+    flow_gt_norm = tf.maximum(tf.norm(tensor=flow_gt, axis=-1), 1e-12)
     F1_logic = tf.logical_and(err_norm > 3, tf.divide(err_norm, flow_gt_norm) > 0.05)
     F1_logic = tf.cast(tf.logical_and(tf.expand_dims(F1_logic, -1), mask > 0), tf.float32)
-    F1 = tf.reduce_sum(F1_logic) / (tf.reduce_sum(mask) + 1e-6)
+    F1 = tf.reduce_sum(input_tensor=F1_logic) / (tf.reduce_sum(input_tensor=mask) + 1e-6)
     return F1
 
 def average_gradients(tower_grads):
@@ -118,7 +119,7 @@ def average_gradients(tower_grads):
         if grads != []:
             # Average over the 'tower' dimension.
             grad = tf.concat(grads, 0)
-            grad = tf.reduce_mean(grad, 0)
+            grad = tf.reduce_mean(input_tensor=grad, axis=0)
 
             # Keep in mind that the Variables are redundant because they are shared
             # across towers. So .. we will just return the first tower's pointer to
@@ -130,7 +131,7 @@ def average_gradients(tower_grads):
 
 
 def length_sq(x):
-    return tf.reduce_sum(tf.square(x), 3, keepdims=True)
+    return tf.reduce_sum(input_tensor=tf.square(x), axis=3, keepdims=True)
 
 # def occlusion(flow_fw, flow_bw):
 #     x_shape = tf.shape(flow_fw)
@@ -165,10 +166,10 @@ def compute_rigid_flow(depth, pose, intrinsics, reverse_pose=False):
     # Convert pose vector to matrix
     pose = pose_vec2mat(pose)
     if reverse_pose:
-        pose = tf.matrix_inverse(pose)
+        pose = tf.linalg.inv(pose)
     # Construct pixel grid coordinates
     pixel_coords = meshgrid(batch, height, width)
-    tgt_pixel_coords = tf.transpose(pixel_coords[:,:2,:,:], [0, 2, 3, 1])
+    tgt_pixel_coords = tf.transpose(a=pixel_coords[:,:2,:,:], perm=[0, 2, 3, 1])
     # Convert pixel coordinates to the camera frame
     cam_coords = pixel2cam(depth, pixel_coords, intrinsics)
     # Construct a 4x4 intrinsic matrix
@@ -202,7 +203,7 @@ def euler2mat(z, y, x, inverse_pose=False):
     Returns:
       Rotation matrix corresponding to the euler angles -- size = [B, N, 3, 3]
     """
-    B = tf.shape(z)[0]
+    B = tf.shape(input=z)[0]
     N = 1
     z = tf.clip_by_value(z, -np.pi, np.pi)
     y = tf.clip_by_value(y, -np.pi, np.pi)
@@ -283,7 +284,7 @@ def pixel2cam(depth, pixel_coords, intrinsics, is_homogeneous=True):
     batch, height, width = depth.get_shape().as_list()
     depth = tf.reshape(depth, [batch, 1, -1])
     pixel_coords = tf.reshape(pixel_coords, [batch, 3, -1])
-    cam_coords = tf.matmul(tf.matrix_inverse(intrinsics), pixel_coords) * depth
+    cam_coords = tf.matmul(tf.linalg.inv(intrinsics), pixel_coords) * depth
     if is_homogeneous:
         ones = tf.ones([batch, 1, height*width])
         cam_coords = tf.concat([cam_coords, ones], axis=1)
@@ -309,7 +310,7 @@ def cam2pixel(cam_coords, proj):
     y_n = y_u / (z_u + 1e-10)
     pixel_coords = tf.concat([x_n, y_n], axis=1)
     pixel_coords = tf.reshape(pixel_coords, [batch, 2, height, width])
-    return tf.transpose(pixel_coords, perm=[0, 2, 3, 1])
+    return tf.transpose(a=pixel_coords, perm=[0, 2, 3, 1])
 
 def meshgrid(batch, height, width, is_homogeneous=True):
     """Construct a 2D meshgrid.
@@ -323,7 +324,7 @@ def meshgrid(batch, height, width, is_homogeneous=True):
     x,y grid coordinates [batch, 2 (3 if homogeneous), height, width]
     """
     x_t = tf.matmul(tf.ones(shape=tf.stack([height, 1])),
-                   tf.transpose(tf.expand_dims(tf.linspace(-1.0, 1.0, width), 1), [1, 0]))
+                   tf.transpose(a=tf.expand_dims(tf.linspace(-1.0, 1.0, width), 1), perm=[1, 0]))
     y_t = tf.matmul(tf.expand_dims(tf.linspace(-1.0, 1.0, height), 1),
                     tf.ones(shape=tf.stack([1, width])))
     x_t = (x_t + 1.0) * 0.5 * tf.cast(width - 1, tf.float32)
@@ -377,7 +378,7 @@ def flow_warp(src_img, flow):
     Source image inverse warped to the target image plane [batch, height_t, width_t, 3]
     """
     batch, height, width, _ = src_img.get_shape().as_list()
-    tgt_pixel_coords = tf.transpose(meshgrid(batch, height, width, False), [0, 2, 3, 1])
+    tgt_pixel_coords = tf.transpose(a=meshgrid(batch, height, width, False), perm=[0, 2, 3, 1])
     src_pixel_coords = tgt_pixel_coords + flow
     output_img = bilinear_sampler(src_img, src_pixel_coords)
     return output_img
@@ -399,14 +400,14 @@ def bilinear_sampler(imgs, coords):
     """
     def _repeat(x, n_repeats):
         rep = tf.transpose(
-            tf.expand_dims(tf.ones(shape=tf.stack([
+            a=tf.expand_dims(tf.ones(shape=tf.stack([
                 n_repeats,
-            ])), 1), [1, 0])
+            ])), 1), perm=[1, 0])
         rep = tf.cast(rep, 'float32')
         x = tf.matmul(tf.reshape(x, (-1, 1)), rep)
         return tf.reshape(x, [-1])
 
-    with tf.name_scope('image_sampling'):
+    with tf.compat.v1.name_scope('image_sampling'):
         coords_x, coords_y = tf.split(coords, [1, 1], axis=3)
         inp_size = imgs.get_shape()
         coord_size = coords.get_shape()
@@ -421,8 +422,8 @@ def bilinear_sampler(imgs, coords):
         y0 = tf.floor(coords_y)
         y1 = y0 + 1
 
-        y_max = tf.cast(tf.shape(imgs)[1] - 1, 'float32')
-        x_max = tf.cast(tf.shape(imgs)[2] - 1, 'float32')
+        y_max = tf.cast(tf.shape(input=imgs)[1] - 1, 'float32')
+        x_max = tf.cast(tf.shape(input=imgs)[2] - 1, 'float32')
         zero = tf.zeros([1], dtype='float32')
 
         x0_safe = tf.clip_by_value(x0, zero, x_max)
@@ -615,10 +616,10 @@ def inverse_warp_new(depth1,
         return cam_coords
 
     def _repeat(x, n_repeats):
-        with tf.variable_scope('_repeat'):
+        with tf.compat.v1.variable_scope('_repeat'):
             rep = tf.transpose(
-                tf.expand_dims(
-                    tf.ones(shape=tf.stack([n_repeats, ])), 1), [1, 0])
+                a=tf.expand_dims(
+                    tf.ones(shape=tf.stack([n_repeats, ])), 1), perm=[1, 0])
             rep = tf.cast(rep, 'int32')
             x = tf.matmul(tf.reshape(x, (-1, 1)), rep)
             return tf.reshape(x, [-1])
@@ -640,7 +641,7 @@ def inverse_warp_new(depth1,
         x_t = tf.matmul(
             tf.ones(shape=tf.stack([height, 1])),
             tf.transpose(
-                tf.expand_dims(tf.linspace(-1.0, 1.0, width), 1), [1, 0]))
+                a=tf.expand_dims(tf.linspace(-1.0, 1.0, width), 1), perm=[1, 0]))
         y_t = tf.matmul(
             tf.expand_dims(tf.linspace(-1.0, 1.0, height), 1),
             tf.ones(shape=tf.stack([1, width])))
@@ -659,7 +660,7 @@ def inverse_warp_new(depth1,
         x_t = tf.matmul(
             tf.ones(shape=tf.stack([height, 1])),
             tf.transpose(
-                tf.expand_dims(tf.linspace(-1.0, 1.0, width), 1), [1, 0]))
+                a=tf.expand_dims(tf.linspace(-1.0, 1.0, width), 1), perm=[1, 0]))
         y_t = tf.matmul(
             tf.expand_dims(tf.linspace(-1.0, 1.0, height), 1),
             tf.ones(shape=tf.stack([1, width])))
@@ -682,7 +683,7 @@ def inverse_warp_new(depth1,
         Returns:
             Rotation matrix corresponding to the euler angles -- size = [B, N, 3, 3]
         """
-        B = tf.shape(z)[0]
+        B = tf.shape(input=z)[0]
         N = 1
         z = tf.clip_by_value(z, -np.pi, np.pi)
         y = tf.clip_by_value(y, -np.pi, np.pi)
@@ -740,7 +741,7 @@ def inverse_warp_new(depth1,
         transform_mat = tf.concat([transform_mat, filler], axis=1)
         return transform_mat
 
-    dims = tf.shape(depth1)
+    dims = tf.shape(input=depth1)
     batch_size, img_height, img_width = dims[0], dims[1], dims[2]
     depth1 = tf.reshape(depth1, [batch_size, 1, img_height * img_width])
     grid = _meshgrid_abs(img_height, img_width)
@@ -755,7 +756,7 @@ def inverse_warp_new(depth1,
         pose_mat = _pose_vec2mat(pose)
 
     if pose_mat_inverse:
-        pose_mat = tf.matrix_inverse(pose_mat)
+        pose_mat = tf.linalg.inv(pose_mat)
     # Point Cloud \hat{Q_1}
     cam_coords1_trans = tf.matmul(pose_mat, cam_coords1_hom)[:, 0:3, :]
 
@@ -764,26 +765,26 @@ def inverse_warp_new(depth1,
     cam_coords2 = _pixel2cam(depth2, grid, intrinsics_inv)
     cam_coords2 = tf.reshape(cam_coords2,
                              [batch_size, 3, img_height, img_width])
-    cam_coords2 = tf.transpose(cam_coords2, [0, 2, 3, 1])
+    cam_coords2 = tf.transpose(a=cam_coords2, perm=[0, 2, 3, 1])
     cam_coords2_trans = transformer_old(cam_coords2, flow_input,
                                         [img_height, img_width])
     # Point Cloud \tilda{Q_1}
     cam_coords2_trans = tf.reshape(
-        tf.transpose(cam_coords2_trans, [0, 3, 1, 2]), [batch_size, 3, -1])
+        tf.transpose(a=cam_coords2_trans, perm=[0, 3, 1, 2]), [batch_size, 3, -1])
 
     occu_mask = tf.reshape(occu_mask, [batch_size, 1, -1])
     # To eliminate occluded area from the small_mask
-    occu_mask = tf.where(occu_mask < 0.75,
+    occu_mask = tf.compat.v1.where(occu_mask < 0.75,
                          tf.ones_like(occu_mask) * 10000.0,
                          tf.ones_like(occu_mask))
 
     diff2 = tf.sqrt(
         tf.reduce_sum(
-            tf.square(cam_coords1_trans - cam_coords2_trans),
+            input_tensor=tf.square(cam_coords1_trans - cam_coords2_trans),
             axis=1,
             keepdims=True)) * occu_mask
-    small_mask = tf.where(
-        diff2 < tf.contrib.distributions.percentile(
+    small_mask = tf.compat.v1.where(
+        diff2 < tfp.stats.percentile(
             diff2, 25.0, axis=2, keepdims=True),
         tf.ones_like(diff2),
         tf.zeros_like(diff2))
@@ -803,7 +804,7 @@ def inverse_warp_new(depth1,
     src_pixel_coords = _cam2pixel(cam_coords1_hom, proj_cam_to_src_pixel)
     src_pixel_coords = tf.reshape(src_pixel_coords,
                                   [batch_size, 2, img_height, img_width])
-    src_pixel_coords = tf.transpose(src_pixel_coords, perm=[0, 2, 3, 1])
+    src_pixel_coords = tf.transpose(a=src_pixel_coords, perm=[0, 2, 3, 1])
 
     tgt_pixel_coords_x, tgt_pixel_coords_y = _meshgrid_abs_xy(
         batch_size, img_height, img_width)
@@ -861,7 +862,7 @@ def inverse_warp(depth,
         x_t = tf.matmul(
             tf.ones(shape=tf.stack([height, 1])),
             tf.transpose(
-                tf.expand_dims(tf.linspace(-1.0, 1.0, width), 1), [1, 0]))
+                a=tf.expand_dims(tf.linspace(-1.0, 1.0, width), 1), perm=[1, 0]))
         y_t = tf.matmul(
             tf.expand_dims(tf.linspace(-1.0, 1.0, height), 1),
             tf.ones(shape=tf.stack([1, width])))
@@ -880,7 +881,7 @@ def inverse_warp(depth,
         x_t = tf.matmul(
             tf.ones(shape=tf.stack([height, 1])),
             tf.transpose(
-                tf.expand_dims(tf.linspace(-1.0, 1.0, width), 1), [1, 0]))
+                a=tf.expand_dims(tf.linspace(-1.0, 1.0, width), 1), perm=[1, 0]))
         y_t = tf.matmul(
             tf.expand_dims(tf.linspace(-1.0, 1.0, height), 1),
             tf.ones(shape=tf.stack([1, width])))
@@ -903,7 +904,7 @@ def inverse_warp(depth,
         Returns:
             Rotation matrix corresponding to the euler angles -- size = [B, N, 3, 3]
         """
-        B = tf.shape(z)[0]
+        B = tf.shape(input=z)[0]
         N = 1
         z = tf.clip_by_value(z, -np.pi, np.pi)
         y = tf.clip_by_value(y, -np.pi, np.pi)
@@ -961,7 +962,7 @@ def inverse_warp(depth,
         transform_mat = tf.concat([transform_mat, filler], axis=1)
         return transform_mat
 
-    dims = tf.shape(depth)
+    dims = tf.shape(input=depth)
     batch_size, img_height, img_width = dims[0], dims[1], dims[2]
     depth = tf.reshape(depth, [batch_size, 1, img_height * img_width])
     grid = _meshgrid_abs(img_height, img_width)
@@ -975,7 +976,7 @@ def inverse_warp(depth,
         pose_mat = _pose_vec2mat(pose)
 
     if pose_mat_inverse:
-        pose_mat = tf.matrix_inverse(pose_mat)
+        pose_mat = tf.linalg.inv(pose_mat)
 
     # Get projection matrix for tgt camera frame to source pixel frame
     hom_filler = tf.constant([0.0, 0.0, 0.0, 1.0], shape=[1, 1, 4])
@@ -986,7 +987,7 @@ def inverse_warp(depth,
     src_pixel_coords = _cam2pixel(cam_coords_hom, proj_cam_to_src_pixel)
     src_pixel_coords = tf.reshape(src_pixel_coords,
                                   [batch_size, 2, img_height, img_width])
-    src_pixel_coords = tf.transpose(src_pixel_coords, perm=[0, 2, 3, 1])
+    src_pixel_coords = tf.transpose(a=src_pixel_coords, perm=[0, 2, 3, 1])
 
     tgt_pixel_coords_x, tgt_pixel_coords_y = _meshgrid_abs_xy(
         batch_size, img_height, img_width)
@@ -1009,23 +1010,23 @@ def calculate_pose_basis(cam_coords1, cam_coords2, weights, batch_size):
         transformation matrix -- [B, 4, 4]
     '''
     centroids1 = tf.reduce_mean(
-        cam_coords1 * weights, axis=2, keepdims=True) / tf.reduce_mean(
-            weights, axis=2, keepdims=True)
+        input_tensor=cam_coords1 * weights, axis=2, keepdims=True) / tf.reduce_mean(
+            input_tensor=weights, axis=2, keepdims=True)
     centroids2 = tf.reduce_mean(
-        cam_coords2 * weights, axis=2, keepdims=True) / tf.reduce_mean(
-            weights, axis=2, keepdims=True)
+        input_tensor=cam_coords2 * weights, axis=2, keepdims=True) / tf.reduce_mean(
+            input_tensor=weights, axis=2, keepdims=True)
 
     cam_coords1_shifted = tf.expand_dims(
-        tf.transpose(cam_coords1 - centroids1, [0, 2, 1]), -1)
+        tf.transpose(a=cam_coords1 - centroids1, perm=[0, 2, 1]), -1)
     cam_coords2_shifted = tf.expand_dims(
-        tf.transpose(cam_coords2 - centroids2, [0, 2, 1]), -2)
+        tf.transpose(a=cam_coords2 - centroids2, perm=[0, 2, 1]), -2)
 
-    weights_trans = tf.expand_dims(tf.transpose(weights, [0, 2, 1]), -1)
+    weights_trans = tf.expand_dims(tf.transpose(a=weights, perm=[0, 2, 1]), -1)
     H = tf.reduce_sum(
-        tf.matmul(cam_coords1_shifted, cam_coords2_shifted) * weights_trans,
+        input_tensor=tf.matmul(cam_coords1_shifted, cam_coords2_shifted) * weights_trans,
         axis=1,
         keepdims=False)
-    S, U, V = tf.svd(H)
+    S, U, V = tf.linalg.svd(H)
     R = tf.matmul(V, U, transpose_a=False, transpose_b=True)
 
     T = -tf.matmul(R, centroids1) + centroids2
@@ -1039,9 +1040,9 @@ def calculate_pose_basis(cam_coords1, cam_coords2, weights, batch_size):
 def get_imagenet_vars_to_restore(imagenet_ckpt):
     """Returns dict of variables to restore from ImageNet-checkpoint."""
     vars_to_restore_imagenet = {}
-    ckpt_var_names = tf.contrib.framework.list_variables(imagenet_ckpt)
+    ckpt_var_names = tf.train.list_variables(imagenet_ckpt)
     ckpt_var_names = [name for (name, unused_shape) in ckpt_var_names]
-    model_vars = tf.global_variables()
+    model_vars = tf.compat.v1.global_variables()
 
     for v in model_vars:
         if 'global_step' in v.op.name: continue
@@ -1066,16 +1067,16 @@ def get_vars_to_save_and_restore(ckpt=None):
     Returns:
     List of all variables that need to be saved/restored.
     """
-    model_vars = tf.trainable_variables()
+    model_vars = tf.compat.v1.trainable_variables()
     # Add batchnorm variables.
-    bn_vars = [v for v in tf.global_variables()
+    bn_vars = [v for v in tf.compat.v1.global_variables()
                if 'moving_mean' in v.op.name or 'moving_variance' in v.op.name or
                'mu' in v.op.name or 'sigma' in v.op.name]
     model_vars.extend(bn_vars)
     model_vars = sorted(model_vars, key=lambda x: x.op.name)
     mapping = {}
     if ckpt is not None:
-        ckpt_var = tf.contrib.framework.list_variables(ckpt)
+        ckpt_var = tf.train.list_variables(ckpt)
         ckpt_var_names = [name for (name, unused_shape) in ckpt_var]
         ckpt_var_shapes = [shape for (unused_name, shape) in ckpt_var]
         not_loaded = list(ckpt_var_names)
