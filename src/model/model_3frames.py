@@ -12,6 +12,12 @@ from utils.optical_flow_warp_old import transformer_old
 from utils.loss_utils import SSIM, cal_grad2_error_mask, charbonnier_loss, cal_grad2_error, compute_edge_aware_smooth_loss, ternary_loss, depth_smoothness
 from utils.utils import average_gradients, normalize_depth_for_display, preprocess_image, deprocess_image, inverse_warp, inverse_warp_new
 
+def spatial_normalize(disp):
+    # Credit: https://github.com/yzcjtr/GeoNet/blob/master/geonet_model.py
+    _, curr_h, curr_w, curr_c = disp.get_shape().as_list()
+    disp_mean = tf.reduce_mean(input_tensor=disp, axis=[1,2,3], keepdims=True)
+    disp_mean = tf.tile(disp_mean, [1, curr_h, curr_w, curr_c])
+    return disp/disp_mean
 
 class Model(object):
     def __init__(self, tgt_image, src_image_stack, tgt_image_norm, src_image_stack_norm, cam2pix, pix2cam, batch_size, img_height, img_width, mode, scope=None, reuse_scope=None):
@@ -85,7 +91,9 @@ class Model(object):
 
         self.pred_fw_flows = [flow_fw0, flow_fw1, flow_fw2]
         self.pred_bw_flows = [flow_bw0, flow_bw1, flow_bw2]
+    
 
+    
     def build_dp_model(self, scale_normalize=True, scope=None, reuse_scope=False):
         print("[Info] Building depth and pose network ...")
         print("[Info] img_height:", self.img_height, "img_width", self.img_width)
@@ -94,20 +102,16 @@ class Model(object):
         self.depth = {}
         self.depth_upsampled = {}
         self.disp_bottleneck = {}
+        
 
-        def spatial_normalize(self, disp):
-        # Credit: https://github.com/yzcjtr/GeoNet/blob/master/geonet_model.py
-            _, curr_h, curr_w, curr_c = disp.get_shape().as_list()
-            disp_mean = tf.reduce_mean(input_tensor=disp, axis=[1,2,3], keepdims=True)
-            disp_mean = tf.tile(disp_mean, [1, curr_h, curr_w, curr_c])
-            return disp/disp_mean
+
 
         with tf.compat.v1.variable_scope(scope, reuse=tf.compat.v1.AUTO_REUSE):
             tgt_pred_disp, tgt_disp_bottlenecks = D_Net(self.tgt_image_norm, weight_reg=self.weight_reg, is_training=True, reuse=False)
             if scale_normalize:
                 # As proposed in https://arxiv.org/abs/1712.00175, this can
                 # bring improvement in depth estimation, but not included in our paper.
-                tgt_pred_disp = [self.spatial_normalize(disp) for disp in tgt_pred_disp]
+                tgt_pred_disp = [spatial_normalize(disp) for disp in tgt_pred_disp]
             tgt_pred_depth = [1. / d for d in tgt_pred_disp]
             self.disp['tgt'] = tgt_pred_disp
             self.depth['tgt'] = tgt_pred_depth
@@ -122,7 +126,7 @@ class Model(object):
             for i in range(self.num_source):
                 temp_disp, temp_disp_bottlenecks = D_Net(self.src_image_stack_norm[:,:,:,3*i:3*(i+1)], weight_reg=self.weight_reg, is_training=True, reuse=True)
                 if scale_normalize:
-                    temp_disp = [self.spatial_normalize(disp) for disp in temp_disp]
+                    temp_disp = [spatial_normalize(disp) for disp in temp_disp]
                 temp_depth = [1./d for d in temp_disp]
                 name = 'src{}'.format(i)
                 self.disp[name] = temp_disp

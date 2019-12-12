@@ -185,7 +185,11 @@ def shuffle_unit(x, groups):
 
 
 def conv_bn_relu(x, out_channel, kernel_size, stride=1, dilation=1, scope=None):
-    with tf.compat.v1.variable_scope('conv_bn_relu_'+scope, 'conv_bn_relu'):
+    if scope != None:
+        scopename = 'conv_bn_relu_' + scope
+    else:
+        scopename = scope
+    with tf.compat.v1.variable_scope(scopename, 'conv_bn_relu'):
         x = slim.conv2d(x, out_channel, kernel_size, stride, rate=dilation,
                         biases_initializer=None, activation_fn=None)
         x = slim.batch_norm(x, activation_fn=tf.nn.relu, fused=False)
