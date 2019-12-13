@@ -13,7 +13,7 @@ from kitti_eval.flow_tool import flowlib as fl
 
 from six.moves import xrange
 from scipy import misc, io
-from tensorflow.contrib import slim
+
 
 from utils.optical_flow_warp_fwd import transformerFwd
 from utils.optical_flow_warp_old import transformer_old
