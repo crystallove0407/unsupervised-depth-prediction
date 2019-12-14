@@ -10,7 +10,7 @@ __all__ = ['ShuffleNetV2', 'shufflenetv2_wd2',
 import os
 import tensorflow as tf
 import tensorflow.keras.layers as nn
-from .common import conv1x1, depthwise_conv3x3, conv1x1_block, conv3x3_block, ChannelShuffle, SEBlock,\
+from common import conv1x1, depthwise_conv3x3, conv1x1_block, conv3x3_block, ChannelShuffle, SEBlock,\
     GluonBatchNormalization, MaxPool2d, get_channel_axis, flatten
 
 
@@ -408,6 +408,10 @@ def _test():
         assert (model != shufflenetv2_w1 or weight_count == 2278604)
         assert (model != shufflenetv2_w3d2 or weight_count == 4406098)
         assert (model != shufflenetv2_w2 or weight_count == 7601686)
+        
+        for var in net.trainable_variables:
+            print(var.name)
+        net.summary()
 
 
 if __name__ == "__main__":
