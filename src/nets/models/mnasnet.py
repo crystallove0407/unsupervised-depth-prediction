@@ -187,7 +187,21 @@ class MnasFinalBlock(nn.Layer):
         return x
 
 
-class MnasNet(tf.keras.Model):
+def MnasNet(inputs,
+            channels,
+            init_block_channels,
+            final_block_channels,
+            kernels3,
+            exp_factors,
+            se_factors,
+            init_block_use_skip,
+            final_block_use_skip,
+            training=False,
+            in_channels=3,
+            in_size=(224, 224),
+            data_format="channels_last",
+            model_name='mnasnet'
+            **kwargs):
     """
     MnasNet model from 'MnasNet: Platform-Aware Neural Architecture Search for Mobile,'
     https://arxiv.org/abs/1807.11626.
@@ -219,70 +233,45 @@ class MnasNet(tf.keras.Model):
     data_format : str, default 'channels_last'
         The ordering of the dimensions in tensors.
     """
-    def __init__(self,
-                 channels,
-                 init_block_channels,
-                 final_block_channels,
-                 kernels3,
-                 exp_factors,
-                 se_factors,
-                 init_block_use_skip,
-                 final_block_use_skip,
-                 in_channels=3,
-                 in_size=(224, 224),
-                 classes=1000,
-                 data_format="channels_last",
-                 **kwargs):
-        super(MnasNet, self).__init__(**kwargs)
-        self.in_size = in_size
-        self.classes = classes
-        self.data_format = data_format
-
-        self.features = tf.keras.Sequential(name="features")
-        self.features.add(MnasInitBlock(
-            in_channels=in_channels,
+    skip = []
+    x = MnasInitBlock(in_channels=in_channels,
             out_channels=init_block_channels[1],
             mid_channels=init_block_channels[0],
             use_skip=init_block_use_skip,
             data_format=data_format,
-            name="init_block"))
-        in_channels = init_block_channels[1]
-        for i, channels_per_stage in enumerate(channels):
-            stage = tf.keras.Sequential(name="stage{}".format(i + 1))
-            for j, out_channels in enumerate(channels_per_stage):
-                strides = 2 if (j == 0) else 1
-                use_kernel3 = kernels3[i][j] == 1
-                exp_factor = exp_factors[i][j]
-                se_factor = se_factors[i][j]
-                stage.add(DwsExpSEResUnit(
-                    in_channels=in_channels,
-                    out_channels=out_channels,
-                    strides=strides,
-                    use_kernel3=use_kernel3,
-                    exp_factor=exp_factor,
-                    se_factor=se_factor,
-                    data_format=data_format,
-                    name="unit{}".format(j + 1)))
-                in_channels = out_channels
-            self.features.add(stage)
-        self.features.add(MnasFinalBlock(
-            in_channels=in_channels,
-            out_channels=final_block_channels[1],
-            mid_channels=final_block_channels[0],
-            use_skip=final_block_use_skip,
-            data_format=data_format,
-            name="final_block"))
-        in_channels = final_block_channels[1]
-        self.features.add(nn.AveragePooling2D(
-            pool_size=7,
-            strides=1,
-            data_format=data_format,
-            name="final_pool"))
+            name="init_block")(inputs, training=training)
+    skip.append(x)
+    
+    in_channels = init_block_channels[1]
+    for i, channels_per_stage in enumerate(channels):
+        stage = tf.keras.Sequential(name="stage{}".format(i + 1))
+        for j, out_channels in enumerate(channels_per_stage):
+            strides = 2 if (j == 0) else 1
+            use_kernel3 = kernels3[i][j] == 1
+            exp_factor = exp_factors[i][j]
+            se_factor = se_factors[i][j]
+            stage.add(DwsExpSEResUnit(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                strides=strides,
+                use_kernel3=use_kernel3,
+                exp_factor=exp_factor,
+                se_factor=se_factor,
+                data_format=data_format,
+                name="unit{}".format(j + 1)))
+            in_channels = out_channels
+        x = stage(x, training=training)
+        skip.append(x)
+    x = MnasFinalBlock(
+        in_channels=in_channels,
+        out_channels=final_block_channels[1],
+        mid_channels=final_block_channels[0],
+        use_skip=final_block_use_skip,
+        data_format=data_format,
+        name="final_block")(x, training=training)
+    features = tf.keras.Model(inputs=inputs, outputs=[x, skip], name=model_name)
+    return features    
 
-        self.output1 = nn.Dense(
-            units=classes,
-            input_dim=in_channels,
-            name="output1")
 
     def call(self, x, training=None):
         x = self.features(x, training=training)
@@ -291,11 +280,10 @@ class MnasNet(tf.keras.Model):
         return x
 
 
-def get_mnasnet(version,
-                width_scale,
-                model_name=None,
-                pretrained=False,
-                root=os.path.join("~", ".tensorflow", "models"),
+def get_mnasnet(input_shape,
+                version='a1',
+                model_size='M',
+                training=False,
                 **kwargs):
     """
     Create MnasNet model with specific parameters.
@@ -313,6 +301,7 @@ def get_mnasnet(version,
     root : str, default '~/.tensorflow/models'
         Location for keeping the model parameters.
     """
+    inputs = tf.keras.Input(shape=input_shape, name='input_image')
     if version == "b1":
         init_block_channels = [32, 16]
         final_block_channels = [320, 1280]
@@ -342,12 +331,21 @@ def get_mnasnet(version,
         final_block_use_skip = True
     else:
         raise ValueError("Unsupported MnasNet version {}".format(version))
+    
+    if model_size == 'S':
+        wid_scale = 0.5
+    if model_size == 'M':
+        width_scale = 1.0
+    if model_size == 'L':
+        width_scale = 1.5
 
     if width_scale != 1.0:
         channels = [[round_channels(cij * width_scale) for cij in ci] for ci in channels]
         init_block_channels = round_channels(init_block_channels * width_scale)
 
     net = MnasNet(
+        inputs=inputs,
+        training=training,
         channels=channels,
         init_block_channels=init_block_channels,
         final_block_channels=final_block_channels,
@@ -356,20 +354,9 @@ def get_mnasnet(version,
         se_factors=se_factors,
         init_block_use_skip=init_block_use_skip,
         final_block_use_skip=final_block_use_skip,
+        model_name='mnasnet_'+model_size,
         **kwargs)
 
-    if pretrained:
-        if (model_name is None) or (not model_name):
-            raise ValueError("Parameter `model_name` should be properly initialized for loading pretrained model.")
-        from .model_store import get_model_file
-        in_channels = kwargs["in_channels"] if ("in_channels" in kwargs) else 3
-        input_shape = (1,) + (in_channels,) + net.in_size if net.data_format == "channels_first" else\
-            (1,) + net.in_size + (in_channels,)
-        net.build(input_shape=input_shape)
-        net.load_weights(
-            filepath=get_model_file(
-                model_name=model_name,
-                local_model_store_dir_path=root))
 
     return net
 
@@ -448,4 +435,9 @@ def _test():
 
 
 if __name__ == "__main__":
-    _test()
+    # _test()
+    net = get_mnasnet(input_shape=(128, 416, 3),
+                        version='ai',
+                        model_size='M',
+                        training=True)
+    net.summary()

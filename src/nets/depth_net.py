@@ -22,6 +22,11 @@ def get_encoder(net_name, input_shape, training=False):
     if net_name == 'shufflenetv2':
         net = get_shufflenetv2(input_shape=input_shape, model_size='S', training=training)
     
+    if net_name == 'mnasnet':
+        net = get_mnasnet(input_shape=input_shape,
+                        version='a1',
+                        model_size='M',
+                        training=training)
     return net
 
 def SubpixelConv2D(input_shape, scale=4, name='subpixel'):
@@ -42,7 +47,7 @@ def SubpixelConv2D(input_shape, scale=4, name='subpixel'):
 
 def Depth_net(input_shape=(128,416,3), training=False):
     inputs = tf.keras.Input(shape=input_shape)
-    net = get_encoder(net_name='shufflenetv2', input_shape=input_shape, training=training)
+    net = get_encoder(net_name='mnasnet', input_shape=input_shape, training=training)
     feature = net(inputs)
     x, skip = feature
     

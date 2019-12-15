@@ -178,22 +178,22 @@ class ShuffleInitBlock(nn.Layer):
 
 def shufflenetv2(inputs,
                  channels,
-                init_block_channels,
-                final_block_channels,
-                training=None,
-                use_se=False,
-                use_residual=False,
-                in_channels=3,
-                in_size=(224, 224),
-                data_format="channels_last",
-                model_name='shufflenetv2_wd2',
-                **kwargs):
+                 init_block_channels,
+                 final_block_channels,
+                 training=None,
+                 use_se=False,
+                 use_residual=False,
+                 in_channels=3,
+                 in_size=(224, 224),
+                 data_format="channels_last",
+                 model_name='shufflenetv2',
+                 **kwargs):
     skip = []
     x1, x = ShuffleInitBlock(
-            in_channels=in_channels,
-            out_channels=init_block_channels,
-            data_format=data_format,
-            name="init_block")(inputs, training=training)
+        in_channels=in_channels,
+        out_channels=init_block_channels,
+        data_format=data_format,
+        name="init_block")(inputs, training=training)
     skip.append(x1)
     skip.append(x)
     in_channels = init_block_channels
@@ -217,8 +217,10 @@ def shufflenetv2(inputs,
         out_channels=final_block_channels,
         data_format=data_format,
         name="final_block")(x, training=training)
-    features = tf.keras.Model(inputs=inputs, outputs=[x, skip], name=model_name)
+    features = tf.keras.Model(inputs=inputs, outputs=[
+                              x, skip], name=model_name)
     return features
+
 
 def get_shufflenetv2(input_shape, model_size='M', training=False, **kwargs):
     """
@@ -235,7 +237,7 @@ def get_shufflenetv2(input_shape, model_size='M', training=False, **kwargs):
     root : str, default '~/.tensorflow/models'
         Location for keeping the model parameters.
     """
-    
+
     inputs = tf.keras.Input(shape=input_shape, name='input_image')
     init_block_channels = 24
     final_block_channels = 1024
@@ -243,7 +245,7 @@ def get_shufflenetv2(input_shape, model_size='M', training=False, **kwargs):
     channels_per_layers = [116, 232, 464]
 
     channels = [[ci] * li for (ci, li) in zip(channels_per_layers, layers)]
-    
+
     if model_size == 'S':
         width_scale = (12.0 / 29.0)
     if model_size == 'M':
@@ -266,7 +268,6 @@ def get_shufflenetv2(input_shape, model_size='M', training=False, **kwargs):
         final_block_channels=final_block_channels,
         model_name='shufflenetv2_'+model_size,
         **kwargs)
-
 
     return net
 
@@ -360,7 +361,7 @@ def _test():
         assert (model != shufflenetv2_w1 or weight_count == 2278604)
         assert (model != shufflenetv2_w3d2 or weight_count == 4406098)
         assert (model != shufflenetv2_w2 or weight_count == 7601686)
-        
+
         for var in net.trainable_variables:
             print(var.name)
         net.summary()
