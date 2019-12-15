@@ -216,7 +216,7 @@ def shufflenetv2(inputs,
     features = tf.keras.Model(inputs=inputs, outputs=[x, skip], name=model_name)
     return features
 
-def get_shufflenetv2(input_shape, model_size='S', **kwargs):
+def get_shufflenetv2(input_shape, model_size='M', **kwargs):
     """
     Create ShuffleNetV2 model with specific parameters.
 
@@ -240,13 +240,13 @@ def get_shufflenetv2(input_shape, model_size='S', **kwargs):
 
     channels = [[ci] * li for (ci, li) in zip(channels_per_layers, layers)]
     
-    if model_size == 'XS':
-        width_scale = (12.0 / 29.0)
     if model_size == 'S':
-        width_scale = 1.0
+        width_scale = (12.0 / 29.0)
     if model_size == 'M':
-        width_scale = (44.0 / 29.0)
+        width_scale = 1.0
     if model_size == 'L':
+        width_scale = (44.0 / 29.0)
+    if model_size == 'XL':
         width_scale = (61.0 / 29.0)
 
     if width_scale != 1.0:

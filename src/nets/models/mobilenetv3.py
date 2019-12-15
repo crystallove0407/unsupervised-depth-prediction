@@ -205,7 +205,23 @@ class MobileNetV3Classifier(nn.Layer):
         return x
 
 
-class MobileNetV3(tf.keras.Model):
+def MobileNetV3(inputs,
+                channels,
+                exp_channels,
+                init_block_channels,
+                final_block_channels,
+                classifier_mid_channels,
+                kernels3,
+                use_relu,
+                use_se,
+                first_stride,
+                final_use_se,
+                in_channels=3,
+                in_size=(224, 224),
+                classes=1000,
+                data_format="channels_last",
+                model_name='MobileNetV3'
+                **kwargs):
     """
     MobileNetV3 model from 'Searching for MobileNetV3,' https://arxiv.org/abs/1905.02244.
 
@@ -240,86 +256,53 @@ class MobileNetV3(tf.keras.Model):
     data_format : str, default 'channels_last'
         The ordering of the dimensions in tensors.
     """
-    def __init__(self,
-                 channels,
-                 exp_channels,
-                 init_block_channels,
-                 final_block_channels,
-                 classifier_mid_channels,
-                 kernels3,
-                 use_relu,
-                 use_se,
-                 first_stride,
-                 final_use_se,
-                 in_channels=3,
-                 in_size=(224, 224),
-                 classes=1000,
-                 data_format="channels_last",
-                 **kwargs):
-        super(MobileNetV3, self).__init__(**kwargs)
-        self.in_size = in_size
-        self.classes = classes
-        self.data_format = data_format
+    skip = []
 
-        self.features = tf.keras.Sequential(name="features")
-        self.features.add(conv3x3_block(
-            in_channels=in_channels,
-            out_channels=init_block_channels,
-            strides=2,
-            activation="hswish",
-            data_format=data_format,
-            name="init_block"))
-        in_channels = init_block_channels
-        for i, channels_per_stage in enumerate(channels):
-            stage = tf.keras.Sequential(name="stage{}".format(i + 1))
-            for j, out_channels in enumerate(channels_per_stage):
-                exp_channels_ij = exp_channels[i][j]
-                strides = 2 if (j == 0) and ((i != 0) or first_stride) else 1
-                use_kernel3 = kernels3[i][j] == 1
-                activation = "relu" if use_relu[i][j] == 1 else "hswish"
-                use_se_flag = use_se[i][j] == 1
-                stage.add(MobileNetV3Unit(
-                    in_channels=in_channels,
-                    out_channels=out_channels,
-                    exp_channels=exp_channels_ij,
-                    use_kernel3=use_kernel3,
-                    strides=strides,
-                    activation=activation,
-                    use_se=use_se_flag,
-                    data_format=data_format,
-                    name="unit{}".format(j + 1)))
-                in_channels = out_channels
-            self.features.add(stage)
-        self.features.add(MobileNetV3FinalBlock(
-            in_channels=in_channels,
-            out_channels=final_block_channels,
-            use_se=final_use_se,
-            data_format=data_format,
-            name="final_block"))
-        in_channels = final_block_channels
-        self.features.add(nn.AveragePooling2D(
-            pool_size=7,
-            strides=1,
-            data_format=data_format,
-            name="final_pool"))
+    x = conv3x3_block(
+        in_channels=in_channels,
+        out_channels=init_block_channels,
+        strides=2,
+        activation="hswish",
+        data_format=data_format,
+        name="init_block")(inputs, training=training)
+    skip.append(x)
 
-        self.output1 = MobileNetV3Classifier(
-            in_channels=in_channels,
-            out_channels=classes,
-            mid_channels=classifier_mid_channels,
-            dropout_rate=0.2,
-            data_format=data_format,
-            name="output1")
+    in_channels = init_block_channels
+    for i, channels_per_stage in enumerate(channels):
+        stage = tf.keras.Sequential(name="stage{}".format(i + 1))
+        for j, out_channels in enumerate(channels_per_stage):
+            exp_channels_ij = exp_channels[i][j]
+            strides = 2 if (j == 0) and ((i != 0) or first_stride) else 1
+            use_kernel3 = kernels3[i][j] == 1
+            activation = "relu" if use_relu[i][j] == 1 else "hswish"
+            use_se_flag = use_se[i][j] == 1
+            stage.add(MobileNetV3Unit(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                exp_channels=exp_channels_ij,
+                use_kernel3=use_kernel3,
+                strides=strides,
+                activation=activation,
+                use_se=use_se_flag,
+                data_format=data_format,
+                name="unit{}".format(j + 1)))
+            in_channels = out_channels
+        x = stage(x, training=training)
+        skip.append(x)
+    x = MobileNetV3FinalBlock(
+        in_channels=in_channels,
+        out_channels=final_block_channels,
+        use_se=final_use_se,
+        data_format=data_format,
+        name="final_block")(x, training=training)
 
-    def call(self, x, training=None):
-        x = self.features(x, training=training)
-        x = self.output1(x, training=training)
-        x = flatten(x, self.data_format)
-        return x
+    features = tf.keras.Model(inputs=inputs, outputs=[x, skip], name=model_name)
+    return features
 
 
-def get_mobilenetv3(version,
-                    width_scale,
+def get_mobilenetv3(input_shape,
+                    version,
+                    model_size='L',
                     model_name=None,
                     pretrained=False,
                     root=os.path.join("~", ".tensorflow", "models"),
@@ -340,7 +323,7 @@ def get_mobilenetv3(version,
     root : str, default '~/.tensorflow/models'
         Location for keeping the model parameters.
     """
-
+    inputs = tf.keras.Input(shape=input_shape, name='input_image')
     if version == "small":
         init_block_channels = 16
         channels = [[16], [24, 24], [40, 40, 40, 48, 48], [96, 96, 96]]
@@ -365,6 +348,17 @@ def get_mobilenetv3(version,
     final_use_se = False
     classifier_mid_channels = 1280
 
+    if model_size == 'XS':
+        width_scale = 0.35
+    if model_size == 'S':
+        width_scale = 0.5
+    if model_size == 'M':
+        width_scale = 0.75
+    if model_size == 'L':
+        width_scale = 1.0
+    if model_size == 'XL':
+        width_scale = 1.25
+
     if width_scale != 1.0:
         channels = [[round_channels(cij * width_scale) for cij in ci] for ci in channels]
         exp_channels = [[round_channels(cij * width_scale) for cij in ci] for ci in exp_channels]
@@ -373,6 +367,7 @@ def get_mobilenetv3(version,
             final_block_channels = round_channels(final_block_channels * width_scale)
 
     net = MobileNetV3(
+        inputs=inputs,
         channels=channels,
         exp_channels=exp_channels,
         init_block_channels=init_block_channels,
@@ -383,7 +378,10 @@ def get_mobilenetv3(version,
         use_se=use_se,
         first_stride=first_stride,
         final_use_se=final_use_se,
+        model_name='MobileNetV3_'+model_size,
         **kwargs)
+
+
 
     if pretrained:
         if (model_name is None) or (not model_name):
