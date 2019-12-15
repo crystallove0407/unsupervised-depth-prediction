@@ -10,7 +10,7 @@ __all__ = ['ShuffleNetV2', 'shufflenetv2_wd2',
 import os
 import tensorflow as tf
 import tensorflow.keras.layers as nn
-from common import conv1x1, depthwise_conv3x3, conv1x1_block, conv3x3_block, ChannelShuffle, SEBlock,\
+from .common import conv1x1, depthwise_conv3x3, conv1x1_block, conv3x3_block, ChannelShuffle, SEBlock,\
     GluonBatchNormalization, MaxPool2d, get_channel_axis, flatten
 
 
@@ -171,104 +171,56 @@ class ShuffleInitBlock(nn.Layer):
             name="pool")
 
     def call(self, x, training=None):
-        x = self.conv(x, training=training)
-        x = self.pool(x)
-        return x
+        x1 = self.conv(x, training=training)
+        x2 = self.pool(x1)
+        return x1, x2
 
 
-class ShuffleNetV2(tf.keras.Model):
-    """
-    ShuffleNetV2 model from 'ShuffleNet V2: Practical Guidelines for Efficient CNN Architecture Design,'
-    https://arxiv.org/abs/1807.11164.
-
-    Parameters:
-    ----------
-    channels : list of list of int
-        Number of output channels for each unit.
-    init_block_channels : int
-        Number of output channels for the initial unit.
-    final_block_channels : int
-        Number of output channels for the final block of the feature extractor.
-    use_se : bool, default False
-        Whether to use SE block.
-    use_residual : bool, default False
-        Whether to use residual connections.
-    in_channels : int, default 3
-        Number of input channels.
-    in_size : tuple of two ints, default (224, 224)
-        Spatial size of the expected input image.
-    classes : int, default 1000
-        Number of classification classes.
-    data_format : str, default 'channels_last'
-        The ordering of the dimensions in tensors.
-    """
-
-    def __init__(self,
+def shufflenetv2(inputs,
                  channels,
-                 init_block_channels,
-                 final_block_channels,
-                 use_se=False,
-                 use_residual=False,
-                 in_channels=3,
-                 in_size=(224, 224),
-                 classes=1000,
-                 data_format="channels_last",
-                 **kwargs):
-        super(ShuffleNetV2, self).__init__(**kwargs)
-        self.in_size = in_size
-        self.classes = classes
-        self.data_format = data_format
-
-        self.features = tf.keras.Sequential(name="features")
-        self.features.add(ShuffleInitBlock(
+                init_block_channels,
+                final_block_channels,
+                training=None,
+                use_se=False,
+                use_residual=False,
+                in_channels=3,
+                in_size=(224, 224),
+                data_format="channels_last",
+                model_name='shufflenetv2_wd2',
+                **kwargs):
+    skip = []
+    x1, x = ShuffleInitBlock(
             in_channels=in_channels,
             out_channels=init_block_channels,
             data_format=data_format,
-            name="init_block"))
-        in_channels = init_block_channels
-        for i, channels_per_stage in enumerate(channels):
-            stage = tf.keras.Sequential(name="stage{}".format(i + 1))
-            for j, out_channels in enumerate(channels_per_stage):
-                downsample = (j == 0)
-                stage.add(ShuffleUnit(
-                    in_channels=in_channels,
-                    out_channels=out_channels,
-                    downsample=downsample,
-                    use_se=use_se,
-                    use_residual=use_residual,
-                    data_format=data_format,
-                    name="unit{}".format(j + 1)))
-                in_channels = out_channels
-            self.features.add(stage)
-        self.features.add(conv1x1_block(
-            in_channels=in_channels,
-            out_channels=final_block_channels,
-            data_format=data_format,
-            name="final_block"))
-        in_channels = final_block_channels
-        self.features.add(nn.AveragePooling2D(
-            pool_size=7,
-            strides=1,
-            data_format=data_format,
-            name="final_pool"))
+            name="init_block")(inputs, training=training)
+    skip.append(x1)
+    skip.append(x)
+    in_channels = init_block_channels
+    for i, channels_per_stage in enumerate(channels):
+        stage = tf.keras.Sequential(name="stage{}".format(i + 1))
+        for j, out_channels in enumerate(channels_per_stage):
+            downsample = (j == 0)
+            stage.add(ShuffleUnit(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                downsample=downsample,
+                use_se=use_se,
+                use_residual=use_residual,
+                data_format=data_format,
+                name="unit{}".format(j + 1)))
+            in_channels = out_channels
+        x = stage(x, training=training)
+        skip.append(x)
+    x = conv1x1_block(
+        in_channels=in_channels,
+        out_channels=final_block_channels,
+        data_format=data_format,
+        name="final_block")(x, training=training)
+    features = tf.keras.Model(inputs=inputs, outputs=[x, skip], name=model_name)
+    return features
 
-        self.output1 = nn.Dense(
-            units=classes,
-            input_dim=in_channels,
-            name="output1")
-
-    def call(self, x, training=None):
-        x = self.features(x, training=training)
-        x = flatten(x, self.data_format)
-        x = self.output1(x)
-        return x
-
-
-def get_shufflenetv2(width_scale,
-                     model_name=None,
-                     pretrained=False,
-                     root=os.path.join("~", ".tensorflow", "models"),
-                     **kwargs):
+def get_shufflenetv2(input_shape, model_size='M', training=False, **kwargs):
     """
     Create ShuffleNetV2 model with specific parameters.
 
@@ -276,45 +228,45 @@ def get_shufflenetv2(width_scale,
     ----------
     width_scale : float
         Scale factor for width of layers.
-    model_name : str or None, default None
-        Model name for loading pretrained model.
+    model_size : str, default 'S'
+        Model size: XS, S, M, L -> 0.5, 1, 1.5, 2
     pretrained : bool, default False
         Whether to load the pretrained weights for model.
     root : str, default '~/.tensorflow/models'
         Location for keeping the model parameters.
     """
-
+    
+    inputs = tf.keras.Input(shape=input_shape, name='input_image')
     init_block_channels = 24
     final_block_channels = 1024
     layers = [4, 8, 4]
     channels_per_layers = [116, 232, 464]
 
     channels = [[ci] * li for (ci, li) in zip(channels_per_layers, layers)]
+    
+    if model_size == 'S':
+        width_scale = (12.0 / 29.0)
+    if model_size == 'M':
+        width_scale = 1.0
+    if model_size == 'L':
+        width_scale = (44.0 / 29.0)
+    if model_size == 'XL':
+        width_scale = (61.0 / 29.0)
 
     if width_scale != 1.0:
         channels = [[int(cij * width_scale) for cij in ci] for ci in channels]
         if width_scale > 1.5:
             final_block_channels = int(final_block_channels * width_scale)
 
-    net = ShuffleNetV2(
+    net = shufflenetv2(
+        inputs=inputs,
         channels=channels,
+        training=training,
         init_block_channels=init_block_channels,
         final_block_channels=final_block_channels,
+        model_name='shufflenetv2_'+model_size,
         **kwargs)
 
-    if pretrained:
-        if (model_name is None) or (not model_name):
-            raise ValueError(
-                "Parameter `model_name` should be properly initialized for loading pretrained model.")
-        from .model_store import get_model_file
-        in_channels = kwargs["in_channels"] if ("in_channels" in kwargs) else 3
-        input_shape = (1,) + (in_channels,) + net.in_size if net.data_format == "channels_first" else\
-            (1,) + net.in_size + (in_channels,)
-        net.build(input_shape=input_shape)
-        net.load_weights(
-            filepath=get_model_file(
-                model_name=model_name,
-                local_model_store_dir_path=root))
 
     return net
 

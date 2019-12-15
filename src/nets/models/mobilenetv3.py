@@ -216,11 +216,12 @@ def MobileNetV3(inputs,
                 use_se,
                 first_stride,
                 final_use_se,
+                training=False,
                 in_channels=3,
                 in_size=(224, 224),
                 classes=1000,
                 data_format="channels_last",
-                model_name='MobileNetV3'
+                model_name='MobileNetV3',
                 **kwargs):
     """
     MobileNetV3 model from 'Searching for MobileNetV3,' https://arxiv.org/abs/1905.02244.
@@ -302,6 +303,7 @@ def MobileNetV3(inputs,
 
 def get_mobilenetv3(input_shape,
                     version,
+                    training=False,
                     model_size='L',
                     model_name=None,
                     pretrained=False,
@@ -378,6 +380,7 @@ def get_mobilenetv3(input_shape,
         use_se=use_se,
         first_stride=first_stride,
         final_use_se=final_use_se,
+        training=training,
         model_name='MobileNetV3_'+model_size,
         **kwargs)
 
@@ -583,4 +586,12 @@ def _test():
 
 
 if __name__ == "__main__":
-    _test()
+#     _test()
+    net = get_mobilenetv3(input_shape=(128, 416, 3),
+                    version='small',
+                    model_size='XS',
+                    training=True)
+    net.summary()
+#     batch_saze = 14
+#     x = tf.random.normal((batch_saze, 3, 224, 224) if is_channels_first(data_format) else (batch_saze, 224, 224, 3))
+#     y = net(x)
