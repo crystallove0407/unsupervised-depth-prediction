@@ -83,6 +83,7 @@ class ReLU6(nn.Layer):
         return tf.nn.relu6(x)
 
 
+
 class HSigmoid(nn.Layer):
     """
     Approximated sigmoid function, so-called hard-version of sigmoid from 'Searching for MobileNetV3,'
@@ -128,6 +129,8 @@ def get_activation_layer(activation):
             return nn.ReLU()
         elif activation == "relu6":
             return ReLU6()
+        elif activation == "leaky_relu":
+            return nn.LeakyReLU(alpha=0.1)
         elif activation == "swish":
             return nn.Swish()
         elif activation == "hswish":

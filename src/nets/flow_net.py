@@ -12,157 +12,159 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-
+import numpy as np
 import tensorflow as tf
-from utils.optical_flow_warp_old import transformer_old
+import tensorflow.keras.layers as nn
+from models.common import conv1x1, depthwise_conv3x3, conv1x1_block, conv3x3_block, ChannelShuffle, SEBlock,\
+    GluonBatchNormalization, MaxPool2d, get_channel_axis, flatten, dwconv3x3_block
+# tf.compat.v1.disable_v2_behavior()
 
+def flow_net(input_shape):
+    src0 = tf.keras.Input(shape=input_shape, name='input_src0')
+    tgt = tf.keras.Input(shape=input_shape, name='input_tgt')
+    src1 = tf.keras.Input(shape=input_shape, name='input_src1')
+    
+    fpf = feature_pyramid_flow(input_shape)
+    fpf.summary()
+    
+    feature_src0 = fpf(src0)
+    feature_tgt = fpf(tgt)
+    feature_src1 = fpf(src1)
+    
+    flow = get_flow(input_shape)
+    src0_0, src0_1, src0_2, src0_3, src0_4, src0_5, src0_6 = feature_src0
+    tgt_0, tgt_1, tgt_2, tgt_3, tgt_4, tgt_5, tgt_6 = feature_tgt
+    src1_0, src1_1, src1_2, src1_3, src1_4, src1_5, src1_6 = feature_src1
+    
+    
+     # foward warp: |01 |, | 12|, |0 2| ,direction: ->
+    flow_fw0 = flow(src0_0, src0_1, src0_2, src0_3, src0_4, src0_5, src0_6, 
+                    tgt_0, tgt_1, tgt_2, tgt_3, tgt_4, tgt_5, tgt_6)
+    flow_fw1 = flow(tgt_0, tgt_1, tgt_2, tgt_3, tgt_4, tgt_5, tgt_6, 
+                    src1_0, src1_1, src1_2, src1_3, src1_4, src1_5, src1_6)
+    flow_fw2 = flow(src0_0, src0_1, src0_2, src0_3, src0_4, src0_5, src0_6, 
+                    src1_0, src1_1, src1_2, src1_3, src1_4, src1_5, src1_6)
 
-class Flow_net(tf.keras.Model):
-    def __init__(self):
-        super().__init__()
-        self.feature_pyramid = feature_pyramid_flow()
-        self.get_flow = get_flow()
+    # backward warp: |01 |, | 12|, |0 2| , direction: <-
+    flow_bw0 = flow(tgt_0, tgt_1, tgt_2, tgt_3, tgt_4, tgt_5, tgt_6, 
+                    src0_0, src0_1, src0_2, src0_3, src0_4, src0_5, src0_6)
+    flow_bw1 = flow(src1_0, src1_1, src1_2, src1_3, src1_4, src1_5, src1_6, 
+                    tgt_0, tgt_1, tgt_2, tgt_3, tgt_4, tgt_5, tgt_6)
+    flow_bw2 = flow(src1_0, src1_1, src1_2, src1_3, src1_4, src1_5, src1_6, 
+                    src0_0, src0_1, src0_2, src0_3, src0_4, src0_5, src0_6)
+    
+    model = tf.keras.Model(inputs=[src0, tgt, src1], 
+                           outputs=[flow_fw0, flow_fw1, flow_fw2,
+                                    flow_bw0, flow_bw1, flow_bw2], 
+                           name='flow_net')
+    model.summary()
+    
+    return model
 
-    def call(self, src0, tgt, src1):
-        self.shape = get_allShape(tgt)
+def get_allShape(input_shape, d=4):
+        ''' 列出6種 size的 hight & width
+        list[6]: 0->origin size, ..., 5-> (origin // 2 ** 5)'''
+        h, w, c = input_shape
+        shape = []
+        for i in range(6):
+            shape.append([h // 2**i, w // 2**i])
+        
+        cv_channel = (2 * d + 1)**2
+        decoder_shape = [(h // 2**2, w // 2**2,  32+cv_channel+2),   
+                        (h // 2**3, w // 2**3,  64+cv_channel+2),  
+                        (h // 2**4, w // 2**4,  96+cv_channel+2),  
+                        (h // 2**5, w // 2**5, 128+cv_channel+2),   
+                        (h // 2**6, w // 2**6, cv_channel)]     
 
-        feature_src0 = self.feature_pyramid(src0)
-        feature_tgt = self.feature_pyramid(tgt)
-        feature_src1 = self.feature_pyramid(src1)
+        return shape, decoder_shape
 
-        # foward warp: |01 |, | 12|, |0 2| ,direction: ->
-        flow_fw0 = get_flow(feature_src0, feature_tgt, self.shape)
-        flow_fw1 = get_flow(feature_tgt, feature_src1, self.shape)
-        flow_fw2 = get_flow(feature_src0, feature_src1, self.shape)
+def get_flow(input_shape):
+    d = 4
+    shape, decoder_shape = get_allShape(input_shape, d=d)
+    
+    f11 = tf.keras.Input(shape=np.asarray(input_shape) // 2**1, name='f11')
+    f12 = tf.keras.Input(shape=np.asarray(input_shape) // 2**2, name='f12')
+    f13 = tf.keras.Input(shape=np.asarray(input_shape) // 2**3, name='f13')
+    f14 = tf.keras.Input(shape=np.asarray(input_shape) // 2**4, name='f14')
+    f15 = tf.keras.Input(shape=np.asarray(input_shape) // 2**5, name='f15')
+    f16 = tf.keras.Input(shape=np.asarray(input_shape) // 2**6, name='f16')
+    f21 = tf.keras.Input(shape=np.asarray(input_shape) // 2**1, name='f21')
+    f22 = tf.keras.Input(shape=np.asarray(input_shape) // 2**2, name='f22')
+    f23 = tf.keras.Input(shape=np.asarray(input_shape) // 2**3, name='f23')
+    f24 = tf.keras.Input(shape=np.asarray(input_shape) // 2**4, name='f24')
+    f25 = tf.keras.Input(shape=np.asarray(input_shape) // 2**5, name='f25')
+    f26 = tf.keras.Input(shape=np.asarray(input_shape) // 2**6, name='f26')
+    
+    cost_vol = cost_volumn(d=d)
+    context = context_net()
+    decoder2 = pwc_decoder(input_shape=decoder_shape[0])
+    decoder3 = pwc_decoder(input_shape=decoder_shape[1])
+    decoder4 = pwc_decoder(input_shape=decoder_shape[2])
+    decoder5 = pwc_decoder(input_shape=decoder_shape[3])
+    decoder6 = pwc_decoder(input_shape=decoder_shape[4])
+    
+    
+    # Block6
+    cv6 = cost_vol(f16, f26)
+    flow6, _ = decoder6(cv6)
 
-        # backward warp: |01 |, | 12|, |0 2| , direction: <-
-        flow_bw0 = get_flow(feature_tgt, feature_src0, self.shape)
-        flow_bw1 = get_flow(feature_src1, feature_tgt, self.shape)
-        flow_bw2 = get_flow(feature_src1, feature_src0, self.shape)
+    # Block5
+    flow65 = tf.scalar_mul(2, tf.image.resize(flow6, shape[5], method=tf.image.ResizeMethod.BILINEAR))
+    print('#'*50)
+    f25_warp = transformer_old(f25, flow65, shape[5])
+    print('#'*50)
+    cv5 = cost_vol(f15, f25_warp)
+    flow5, _ = decoder5(tf.concat([cv5, f15, flow65], axis=3)) #2
+    flow5 = tf.math.add(flow5, flow65)
 
-        return [flow_fw0, flow_fw1, flow_fw2], [flow_bw0, flow_bw1, flow_bw2]
+    # Block4
+    flow54 = tf.scalar_mul(2.0, tf.image.resize(flow5, shape[4], method=tf.image.ResizeMethod.BILINEAR))
+    f24_warp = transformer_old(f24, flow54, shape[4])
+    cv4 = cost_vol(f14, f24_warp)
+    flow4, _ = decoder4(tf.concat([cv4, f14, flow54], axis=3)) #2
+    flow4 = tf.math.add(flow4, flow54)
 
-
-class feature_pyramid_flow(tf.keras.layers.Layer):
-    def __init__(self):
-        super().__init__()
-        self.conv2d_1 = tf.keras.layers.conv2d(
-            16, 3, strides=2, activation=leaky_relu)
-        self.conv2d_2 = tf.keras.layers.conv2d(
-            16, 3, strides=1, activation=leaky_relu)
-        self.conv2d_3 = tf.keras.layers.conv2d(
-            32, 3, strides=2, activation=leaky_relu)
-        self.conv2d_4 = tf.keras.layers.conv2d(
-            32, 3, strides=1, activation=leaky_relu)
-        self.conv2d_5 = tf.keras.layers.conv2d(
-            64, 3, strides=2, activation=leaky_relu)
-        self.conv2d_6 = tf.keras.layers.conv2d(
-            64, 3, strides=1, activation=leaky_relu)
-        self.conv2d_7 = tf.keras.layers.conv2d(
-            96, 3, strides=2, activation=leaky_relu)
-        self.conv2d_8 = tf.keras.layers.conv2d(
-            96, 3, strides=1, activation=leaky_relu)
-        self.conv2d_9 = tf.keras.layers.conv2d(
-            128, 3, strides=2, activation=leaky_relu)
-        self.conv2d_10 = tf.keras.layers.conv2d(
-            128, 3, strides=1, activation=leaky_relu)
-        self.conv2d_11 = tf.keras.layers.conv2d(
-            192, 3, strides=2, activation=leaky_relu)
-        self.conv2d_12 = tf.keras.layers.conv2d(
-            192, 3, strides=1, activation=leaky_relu)
-
-    def call(self, inputs):
-        cnv1 = self.conv2d_1(inputs)
-        cnv2 = self.conv2d_2(cnv1)
-        cnv3 = self.conv2d_3(cnv2)
-        cnv4 = self.conv2d_4(cnv3)
-        cnv5 = self.conv2d_5(cnv4)
-        cnv6 = self.conv2d_6(cnv5)
-        cnv7 = self.conv2d_7(cnv6)
-        cnv8 = self.conv2d_8(cnv7)
-        cnv9 = self.conv2d_9(cnv8)
-        cnv10 = self.conv2d_10(cnv9)
-        cnv11 = self.conv2d_11(cnv10)
-        cnv12 = self.conv2d_12(cnv11)
-        return cnv2, cnv4, cnv6, cnv8, cnv10, cnv12
-
-
-class get_flow(tf.keras.layers.Layer):
-    def __init__(self):
-        super().__init__()
-        self.cost_volumn = cost_volumn(d=4)
-        self.context_net = context_net()
-        self.decoder2 = pwc_decoder()
-        self.decoder3 = pwc_decoder()
-        self.decoder4 = pwc_decoder()
-        self.decoder5 = pwc_decoder()
-        self.decoder6 = pwc_decoder()
-
-    def call(self, feature1, feature2, shape):
-        self.shape = shape
-        f11, f12, f13, f14, f15, f16 = feature1
-        f21, f22, f23, f24, f25, f26 = feature2
-
-        # Block6
-        cv6 = self.cost_volumn(f16, f26)
-        flow6, _ = self.decoder6(cv6)
-
-        # Block5
-        flow65 = 2.0 * \
-            tf.image.resize(
-                flow6, self.shape[5], method=tf.image.ResizeMethod.BILINEAR)
-        f25_warp = transformer_old(f25, flow65, self.shape[5])
-        cv5 = self.cost_volumn(f15, f25_warp)
-        flow5, _ = self.decoder5(tf.concat([cv5, f15, flow65], axis=3))
-        flow5 = flow5 + flow65
-
-        # Block4
-        flow54 = 2.0 * \
-            tf.image.resize(
-                flow5, self.shape[4], method=tf.image.ResizeMethod.BILINEAR)
-        f24_warp = transformer_old(f24, flow54, self.shape[4])
-        cv4 = self.cost_volumn(f14, f24_warp)
-        flow4, _ = self.decoder4(tf.concat([cv4, f14, flow54], axis=3))
-        flow4 = flow4 + flow54
-
-        # Block3
-        flow43 = 2.0 * \
-            tf.image.resize(
-                flow4, self.shape[3], method=tf.image.ResizeMethod.BILINEAR)
-        f23_warp = transformer_old(f23, flow43, self.shape[3])
-        cv3 = self.cost_volumn(f13, f23_warp)
-        flow3, _ = self.decoder3(tf.concat([cv3, f13, flow43], axis=3))
-        flow3 = flow3 + flow43
-
-        # Block2
-        flow32 = 2.0 * \
-            tf.image.resize(
-                flow3, self.shape[2], method=tf.image.ResizeMethod.BILINEAR)
-        f22_warp = transformer_old(f22, flow32, self.shape[2])
-        cv2 = self.cost_volumn(f12, f22_warp)
-        flow2, flow2_ = self.decoder2(tf.concat([cv2, f12, flow32], axis=3))
-        flow2 = flow2 + flow32
-
-        # context_net
-        flow2 = self.context_net(tf.concat([flow2, flow2_], axis=3)) + flow2
-
-        flow0_enlarge = tf.image.resize(
-            flow2 * 4.0, self.shape[0], method=tf.image.ResizeMethod.BILINEAR)
-        flow1_enlarge = tf.image.resize(
-            flow3 * 4.0, self.shape[1], method=tf.image.ResizeMethod.BILINEAR)
-        flow2_enlarge = tf.image.resize(
-            flow4 * 4.0, self.shape[2], method=tf.image.ResizeMethod.BILINEAR)
-        flow3_enlarge = tf.image.resize(
-            flow5 * 4.0, self.shape[3], method=tf.image.ResizeMethod.BILINEAR)
-
-        return flow0_enlarge, flow1_enlarge, flow2_enlarge, flow3_enlarge
-
+    # Block3
+    flow43 = tf.scalar_mul(2.0 ,tf.image.resize(flow4, shape[3],
+                                             method=tf.image.ResizeMethod.BILINEAR))
+    f23_warp = transformer_old(f23, flow43, shape[3])
+    cv3 = cost_vol(f13, f23_warp)
+    flow3, _ = decoder3(tf.concat([cv3, f13, flow43], axis=3)) #2
+    flow3 = tf.math.add(flow3, flow43)
+    # Block2
+    flow32 = tf.scalar_mul(2.0, tf.image.resize(flow3, shape[2], method=tf.image.ResizeMethod.BILINEAR))
+    f22_warp = transformer_old(f22, flow32, shape[2])
+    cv2 = cost_vol(f12, f22_warp)
+    flow2, flow2_ = decoder2(tf.concat([cv2, f12, flow32], axis=3)) #2
+    flow2 = tf.math.add(flow2, flow32) #10
+    
+    # context_net
+    flow2 = context(tf.concat([flow2, flow2_], axis=3))
+    flow2 = tf.math.add(flow2, flow2)
+    
+    flow0_enlarge = tf.image.resize(
+            tf.scalar_mul(4.0,flow2), self.shape[0], method=tf.image.ResizeMethod.BILINEAR)
+    flow1_enlarge = tf.image.resize(
+            tf.scalar_mul(4.0,flow3), self.shape[1], method=tf.image.ResizeMethod.BILINEAR)
+    flow2_enlarge = tf.image.resize(
+            tf.scalar_mul(4.0,flow4), self.shape[2], method=tf.image.ResizeMethod.BILINEAR)
+    flow3_enlarge = tf.image.resize(
+            tf.scalar_mul(4.0,flow5), self.shape[3], method=tf.image.ResizeMethod.BILINEAR)
+    
+    model = tf.keras.Model(inputs=[f11, f12, f13, f14, f15, f16,
+                                  f21, f22, f23, f24, f25, f26], 
+                           outputs=[flow0_enlarge, flow1_enlarge, flow2_enlarge, flow3_enlarge], 
+                           name='flow_net')
+    model.summary()
+    
+    return model
+    
 
 class cost_volumn(tf.keras.layers.Layer):
     def __init__(self, d=4):
         super().__init__()
         self.d = d
-
+    
     def call(self, feature1, feature2):
         n, h, w, c = feature1.get_shape().as_list()
         feature2 = tf.pad(tensor=feature2, paddings=[[0, 0], [self.d, self.d], [
@@ -179,69 +181,53 @@ class cost_volumn(tf.keras.layers.Layer):
         x = tf.concat(cv, axis=3)
         return x
 
-
-class pwc_decoder(tf.keras.layers.Layer):
-    def __init__(self):
-        super().__init__()
-        self.conv2d_1 = tf.keras.layers.conv2d(
-            128, 3, strides=1, activation=leaky_relu)
-        self.conv2d_2 = tf.keras.layers.conv2d(
-            128, 3, strides=1, activation=leaky_relu)
-        self.conv2d_3 = tf.keras.layers.conv2d(
-            96, 3, strides=1, activation=leaky_relu)
-        self.conv2d_4 = tf.keras.layers.conv2d(
-            64, 3, strides=1, activation=leaky_relu)
-        self.conv2d_5 = tf.keras.layers.conv2d(
-            32, 3, strides=1, activation=leaky_relu)
-        self.conv2d_6 = tf.keras.layers.conv2d(2, 3, strides=1)
-
-    def call(self, inputs):
-        cnv1 = self.conv2d_1(inputs)
-        cnv2 = self.conv2d_2(cnv1)
-        cnv3 = self.conv2d_3(tf.concat([cnv1, cnv2], axis=3))
-        cnv4 = self.conv2d_4(tf.concat([cnv2, cnv3], axis=3))
-        cnv5 = self.conv2d_5(tf.concat([cnv3, cnv4], axis=3))
-        cnv6 = self.conv2d_6(tf.concat([cnv4, cnv5], axis=3))
-        return cnv6, cnv5
-
-
-class context_net(tf.keras.layers.Layer):
-    def __init__(self):
-        super().__init__()
-        self.conv2d_1 = tf.keras.layers.conv2d(
-            128, 3, strides=1, dilation_rate=1, activation=leaky_relu)
-        self.conv2d_2 = tf.keras.layers.conv2d(
-            128, 3, strides=1, dilation_rate=2, activation=leaky_relu)
-        self.conv2d_3 = tf.keras.layers.conv2d(
-            128, 3, strides=1, dilation_rate=4, activation=leaky_relu)
-        self.conv2d_4 = tf.keras.layers.conv2d(
-            96, 3, strides=1, dilation_rate=8, activation=leaky_relu)
-        self.conv2d_5 = tf.keras.layers.conv2d(
-            64, 3, strides=1, dilation_rate=16, activation=leaky_relu)
-        self.conv2d_6 = tf.keras.layers.conv2d(
-            32, 3, strides=1, dilation_rate=1, activation=leaky_relu)
-        self.conv2d_7 = tf.keras.layers.conv2d(
-            2, 3, strides=1, dilation_rate=1)
-
-    def call(self, inputs):
-        cnv1 = self.conv2d_1(inputs)
-        cnv2 = self.conv2d_2(cnv1)
-        cnv3 = self.conv2d_3(cnv2)
-        cnv4 = self.conv2d_4(cnv3)
-        cnv5 = self.conv2d_5(cnv4)
-        cnv6 = self.conv2d_6(cnv5)
-        cnv7 = self.conv2d_6(cnv6)
-        return cnv7
+def feature_pyramid_flow(input_shape):
+    inputs = tf.keras.Input(shape=input_shape, name='input_image')
+    
+    cnv1 = conv3x3_block(3, 16, strides=2, padding=1, use_bn=False, activation='leaky_relu')(inputs)
+    cnv2 = conv3x3_block(16, 16, use_bn=False, activation='leaky_relu')(cnv1)
+    cnv3 = conv3x3_block(16, 32, strides=2, padding=1, use_bn=False, activation='leaky_relu')(cnv2)
+    cnv4 = conv3x3_block(32, 32, use_bn=False, activation='leaky_relu')(cnv3)
+    cnv5 = conv3x3_block(32, 64, strides=2, padding=1, use_bn=False, activation='leaky_relu')(cnv4)
+    cnv6 = conv3x3_block(64, 64, use_bn=False, activation='leaky_relu')(cnv5)
+    cnv7 = conv3x3_block(16, 96, strides=2, padding=1, use_bn=False, activation='leaky_relu')(cnv6)
+    cnv8 = conv3x3_block(32, 96, use_bn=False, activation='leaky_relu')(cnv7)
+    cnv9 = conv3x3_block(16, 128, strides=2, padding=1, use_bn=False, activation='leaky_relu')(cnv8)
+    cnv10 = conv3x3_block(32, 128, use_bn=False, activation='leaky_relu')(cnv9)
+    cnv11 = conv3x3_block(16, 192, strides=2, padding=1, use_bn=False, activation='leaky_relu')(cnv10)
+    cnv12 = conv3x3_block(32, 192, use_bn=False, activation='leaky_relu')(cnv11)
+    
+    layers = tf.keras.Model(inputs=inputs, 
+                            outputs=[cnv2, cnv4, cnv6, cnv8, cnv10, cnv12],
+                            name='feature_pyramid_flow')
+    return layers    
+    
+def pwc_decoder(input_shape):
+    inputs = tf.keras.Input(shape=input_shape, name='input_image')
+    
+    cnv1 = conv3x3_block(128, 128, use_bn=False, activation='leaky_relu')(inputs)
+    cnv2 = conv3x3_block(128, 128, use_bn=False, activation='leaky_relu')(cnv1)
+    cnv3 = conv3x3_block(128, 96, use_bn=False, activation='leaky_relu')(nn.concatenate([cnv1, cnv2]))
+    cnv4 = conv3x3_block(96, 64, use_bn=False, activation='leaky_relu')(nn.concatenate([cnv2, cnv3]))
+    cnv5 = conv3x3_block(64, 32, use_bn=False, activation='leaky_relu')(nn.concatenate([cnv3, cnv4]))
+    cnv6 = conv3x3_block(32, 2, use_bn=False)(nn.concatenate([cnv4, cnv5]))
+    layers = tf.keras.Model(inputs=inputs, outputs=[cnv6, cnv5], name='pwc_decoder')
+    return layers
+    
+def context_net():
+    layers = tf.keras.Sequential(name='context_net')
+    layers.add(nn.Conv2D(128, 3, dilation_rate=1, padding='same', use_bias=False, activation=nn.LeakyReLU(alpha=0.1)))
+    layers.add(nn.Conv2D(128, 3, dilation_rate=2, padding='same', use_bias=False, activation=nn.LeakyReLU(alpha=0.1)))
+    layers.add(nn.Conv2D(128, 3, dilation_rate=4, padding='same', use_bias=False, activation=nn.LeakyReLU(alpha=0.1)))
+    layers.add(nn.Conv2D(96, 3, dilation_rate=8, padding='same', use_bias=False, activation=nn.LeakyReLU(alpha=0.1)))
+    layers.add(nn.Conv2D(64, 3, dilation_rate=16, padding='same', use_bias=False, activation=nn.LeakyReLU(alpha=0.1)))
+    layers.add(nn.Conv2D(32, 3, dilation_rate=1, padding='same', use_bias=False, activation=nn.LeakyReLU(alpha=0.1)))
+    layers.add(nn.Conv2D(2, 3, dilation_rate=1, padding='same', use_bias=False, activation=None))
+    
+    return layers
 
 
-def get_allShape(image):
-    ''' 列出6種 size的 hight & width
-    list[6]: 0->origin size, 3-> (origin // 2 ** 3), ...'''
-    n, h, w, c = image.get_shape().as_list()
-    shape = []
-    for i in range(6):
-        shape.append([h // 2**i, w // 2**i])
-    return shape
+
 
 
 def leaky_relu(_x, alpha=0.1):
@@ -249,3 +235,174 @@ def leaky_relu(_x, alpha=0.1):
     neg = alpha * (_x - abs(_x)) * 0.5
 
     return pos + neg
+
+
+
+###########################################
+###################################################
+###########################################################
+def transformer_old(U, flo, out_size, name='SpatialTransformer', **kwargs):
+    """Backward warping layer
+
+    Implements a backward warping layer described in 
+    "Unsupervised Deep Learning for Optical Flow Estimation, Zhe Ren et al"
+
+    Parameters
+    ----------
+    U : float
+        The output of a convolutional net should have the
+        shape [num_batch, height, width, num_channels].
+    flo: float
+         The optical flow used to do the backward warping.
+         shape is [num_batch, height, width, 2]
+    out_size: tuple of two ints
+        The size of the output of the network (height, width)
+    """
+
+    def _repeat(x, n_repeats):
+        with tf.compat.v1.variable_scope('_repeat'):
+            rep = tf.transpose(
+                a=tf.expand_dims(
+                    tf.ones(shape=tf.stack([n_repeats, ])), 1), perm=[1, 0])
+            rep = tf.cast(rep, 'int32')
+            x = tf.matmul(tf.reshape(x, (-1, 1)), rep)
+            return tf.reshape(x, [-1])
+
+    def _interpolate(im, x, y, out_size):
+        with tf.compat.v1.variable_scope('_interpolate'):
+            # constants
+            num_batch = tf.shape(input=im)[0]
+            height = tf.shape(input=im)[1]
+            width = tf.shape(input=im)[2]
+            channels = tf.shape(input=im)[3]
+
+            x = tf.cast(x, 'float32')
+            y = tf.cast(y, 'float32')
+            height_f = tf.cast(height, 'float32')
+            width_f = tf.cast(width, 'float32')
+            out_height = out_size[0]
+            out_width = out_size[1]
+            zero = tf.zeros([], dtype='int32')
+            max_y = tf.cast(tf.shape(input=im)[1] - 1, 'int32')
+            max_x = tf.cast(tf.shape(input=im)[2] - 1, 'int32')
+
+            # scale indices from [-1, 1] to [0, width/height]
+            x = (x + 1.0) * (width_f - 1) / 2.0
+            y = (y + 1.0) * (height_f - 1) / 2.0
+
+            # do sampling
+            x0 = tf.cast(tf.floor(x), 'int32')
+            x1 = x0 + 1
+            y0 = tf.cast(tf.floor(y), 'int32')
+            y1 = y0 + 1
+
+            x0_c = tf.clip_by_value(x0, zero, max_x)
+            x1_c = tf.clip_by_value(x1, zero, max_x)
+            y0_c = tf.clip_by_value(y0, zero, max_y)
+            y1_c = tf.clip_by_value(y1, zero, max_y)
+
+            dim2 = width
+            dim1 = width * height
+            base = _repeat(tf.range(num_batch) * dim1, out_height * out_width)
+
+            base_y0 = base + y0_c * dim2
+            base_y1 = base + y1_c * dim2
+            idx_a = base_y0 + x0_c
+            idx_b = base_y1 + x0_c
+            idx_c = base_y0 + x1_c
+            idx_d = base_y1 + x1_c
+
+            # use indices to lookup pixels in the flat image and restore
+            # channels dim
+            im_flat = tf.reshape(im, tf.stack([-1, channels]))
+            im_flat = tf.cast(im_flat, 'float32')
+            Ia = tf.gather(im_flat, idx_a)
+            Ib = tf.gather(im_flat, idx_b)
+            Ic = tf.gather(im_flat, idx_c)
+            Id = tf.gather(im_flat, idx_d)
+
+            # and finally calculate interpolated values
+            x0_f = tf.cast(x0, 'float32')
+            x1_f = tf.cast(x1, 'float32')
+            y0_f = tf.cast(y0, 'float32')
+            y1_f = tf.cast(y1, 'float32')
+            wa = tf.expand_dims(((x1_f - x) * (y1_f - y)), 1)
+            wb = tf.expand_dims(((x1_f - x) * (y - y0_f)), 1)
+            wc = tf.expand_dims(((x - x0_f) * (y1_f - y)), 1)
+            wd = tf.expand_dims(((x - x0_f) * (y - y0_f)), 1)
+            output = tf.add_n([wa * Ia, wb * Ib, wc * Ic, wd * Id])
+            return output
+
+    def _meshgrid(height, width):
+        with tf.compat.v1.variable_scope('_meshgrid'):
+            # This should be equivalent to:
+            #  x_t, y_t = np.meshgrid(np.linspace(-1, 1, width),
+            #                         np.linspace(-1, 1, height))
+            #  ones = np.ones(np.prod(x_t.shape))
+            #  grid = np.vstack([x_t.flatten(), y_t.flatten(), ones])
+            x_t = tf.matmul(
+                tf.ones(shape=tf.stack([height, 1])),
+                tf.transpose(
+                    a=tf.expand_dims(tf.linspace(-1.0, 1.0, width), 1), perm=[1, 0]))
+            y_t = tf.matmul(
+                tf.expand_dims(tf.linspace(-1.0, 1.0, height), 1),
+                tf.ones(shape=tf.stack([1, width])))
+
+            return x_t, y_t
+
+    def _transform(flo, input_dim, out_size):
+        with tf.compat.v1.variable_scope('_transform'):
+            num_batch = tf.shape(input=input_dim)[0]
+            height = tf.shape(input=input_dim)[1]
+            width = tf.shape(input=input_dim)[2]
+            num_channels = tf.shape(input=input_dim)[3]
+
+            # grid of (x_t, y_t, 1), eq (1) in ref [1]
+            height_f = tf.cast(height, 'float32')
+            width_f = tf.cast(width, 'float32')
+            out_height = out_size[0]
+            out_width = out_size[1]
+            x_t, y_t = _meshgrid(out_height, out_width)
+            x_t = tf.expand_dims(x_t, 0)
+            x_t = tf.tile(x_t, [num_batch, 1, 1])
+
+            y_t = tf.expand_dims(y_t, 0)
+            y_t = tf.tile(y_t, [num_batch, 1, 1])
+
+            x_s = x_t + flo[:, :, :, 0] / (
+                (tf.cast(out_width, tf.float32) - 1.0) / 2.0)
+            y_s = y_t + flo[:, :, :, 1] / (
+                (tf.cast(out_height, tf.float32) - 1.0) / 2.0)
+
+            x_s_flat = tf.reshape(x_s, [-1])
+            y_s_flat = tf.reshape(y_s, [-1])
+
+            input_transformed = _interpolate(input_dim, x_s_flat, y_s_flat,
+                                             out_size)
+
+            output = tf.reshape(
+                input_transformed,
+                tf.stack([num_batch, out_height, out_width, num_channels]))
+            return output
+
+    with tf.compat.v1.variable_scope(name):
+        output = _transform(flo, U, out_size)
+        return output
+
+
+if __name__ == '__main__':
+    batch_size = 10
+    src0 = tf.random.normal((batch_size, 256, 832, 3))
+    tgt = tf.random.normal((batch_size, 256, 832, 3))
+    src1 = tf.random.normal((batch_size, 256, 832, 3))
+    
+    net = flow_net(input_shape=(256, 832, 3))
+    
+    for var in net.trainable_variables:
+        print(var.name)
+#     for wei in net.weights:
+#         print(wei)
+    
+    for layer in net.layers:
+        print(layer.name)
+
