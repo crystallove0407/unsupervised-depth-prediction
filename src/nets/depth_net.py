@@ -1,7 +1,6 @@
 from __future__ import division
 import functools
 import numpy as np
-import tensorflow as tf
 
 import os
 import tensorflow as tf
@@ -10,13 +9,19 @@ from models.common import conv1x1, depthwise_conv3x3, conv1x1_block, conv3x3_blo
     GluonBatchNormalization, MaxPool2d, get_channel_axis, flatten, dwconv3x3_block, conv1x1
 
 from models.mobilenetv3 import get_mobilenetv3
+from models.mobilenetv2 import get_mobilenetv2
 from models.shufflenetv2 import get_shufflenetv2
+from models.mnasnet import get_mnasnet
 
 
 def get_encoder(net_name, input_shape, training=False):
     if net_name == 'mobilenetv3':
         net = get_mobilenetv3(input_shape=input_shape,
                                 version='small',
+                                model_size='S',
+                                training=training)
+    if net_name == 'mobilenetv2':
+        net = get_mobilenetv2(input_shape=input_shape,
                                 model_size='S',
                                 training=training)
     if net_name == 'shufflenetv2':
@@ -45,9 +50,12 @@ def SubpixelConv2D(input_shape, scale=4, name='subpixel'):
 
     return nn.Lambda(subpixel, output_shape=subpixel_shape, name=name)
 
+
+
+
 def Depth_net(input_shape=(128,416,3), training=False):
     inputs = tf.keras.Input(shape=input_shape)
-    net = get_encoder(net_name='mnasnet', input_shape=input_shape, training=training)
+    net = get_encoder(net_name='mobilenetv2', input_shape=input_shape, training=training)
     feature = net(inputs)
     x, skip = feature
     

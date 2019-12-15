@@ -8,7 +8,7 @@ __all__ = ['MobileNetV2', 'mobilenetv2_w1', 'mobilenetv2_w3d4', 'mobilenetv2_wd2
 import os
 import tensorflow as tf
 import tensorflow.keras.layers as nn
-from .common import ReLU6, conv1x1, conv1x1_block, conv3x3_block, dwconv3x3_block, flatten
+from .common import ReLU6, conv1x1, conv1x1_block, conv3x3_block, dwconv3x3_block, flatten, make_divisible
 
 
 class LinearBottleneck(nn.Layer):
@@ -70,7 +70,16 @@ class LinearBottleneck(nn.Layer):
         return x
 
 
-class MobileNetV2(tf.keras.Model):
+def MobileNetV2(inputs,
+                channels,
+                 init_block_channels,
+                 final_block_channels,
+                training=False,
+                 in_channels=3,
+                 in_size=(224, 224),
+                 data_format="channels_last",
+                model_name='mobilenetv2',
+                 **kwargs):
     """
     MobileNetV2 model from 'MobileNetV2: Inverted Residuals and Linear Bottlenecks,' https://arxiv.org/abs/1801.04381.
 
@@ -91,74 +100,44 @@ class MobileNetV2(tf.keras.Model):
     data_format : str, default 'channels_last'
         The ordering of the dimensions in tensors.
     """
-    def __init__(self,
-                 channels,
-                 init_block_channels,
-                 final_block_channels,
-                 in_channels=3,
-                 in_size=(224, 224),
-                 classes=1000,
-                 data_format="channels_last",
-                 **kwargs):
-        super(MobileNetV2, self).__init__(**kwargs)
-        self.in_size = in_size
-        self.classes = classes
-        self.data_format = data_format
-
-        self.features = tf.keras.Sequential(name="features")
-        self.features.add(conv3x3_block(
+    skip = []
+    x = conv3x3_block(
             in_channels=in_channels,
             out_channels=init_block_channels,
             strides=2,
             activation=ReLU6(),
             data_format=data_format,
-            name="init_block"))
-        in_channels = init_block_channels
-        for i, channels_per_stage in enumerate(channels):
-            stage = tf.keras.Sequential(name="stage{}".format(i + 1))
-            for j, out_channels in enumerate(channels_per_stage):
-                strides = 2 if (j == 0) and (i != 0) else 1
-                expansion = (i != 0) or (j != 0)
-                stage.add(LinearBottleneck(
+            name="init_block")(inputs, training=training)
+    in_channels = init_block_channels
+    for i, channels_per_stage in enumerate(channels):
+        stage = tf.keras.Sequential(name="stage{}".format(i + 1))
+        for j, out_channels in enumerate(channels_per_stage):
+            strides = 2 if (j == 0) and (i != 0) else 1
+            expansion = (i != 0) or (j != 0)
+            stage.add(LinearBottleneck(
                     in_channels=in_channels,
                     out_channels=out_channels,
                     strides=strides,
                     expansion=expansion,
                     data_format=data_format,
                     name="unit{}".format(j + 1)))
-                in_channels = out_channels
-            self.features.add(stage)
-        self.features.add(conv1x1_block(
+            in_channels = out_channels
+        x = stage(x, training=training)
+        skip.append(x)
+    x = conv1x1_block(
             in_channels=in_channels,
             out_channels=final_block_channels,
             activation=ReLU6(),
             data_format=data_format,
-            name="final_block"))
-        in_channels = final_block_channels
-        self.features.add(nn.AveragePooling2D(
-            pool_size=7,
-            strides=1,
-            data_format=data_format,
-            name="final_pool"))
-
-        self.output1 = conv1x1(
-            in_channels=in_channels,
-            out_channels=classes,
-            use_bias=False,
-            data_format=data_format,
-            name="output1")
-
-    def call(self, x, training=None):
-        x = self.features(x, training=training)
-        x = self.output1(x)
-        x = flatten(x, self.data_format)
-        return x
+            name="final_block")(x, training=training)
+    
+    features = tf.keras.Model(inputs=inputs, outputs=[x, skip], name=model_name)
+    return features
 
 
-def get_mobilenetv2(width_scale,
-                    model_name=None,
-                    pretrained=False,
-                    root=os.path.join("~", ".tensorflow", "models"),
+def get_mobilenetv2(input_shape,
+                    model_size='M',
+                    training=False,
                     **kwargs):
     """
     Create MobileNetV2 model with specific parameters.
@@ -174,7 +153,7 @@ def get_mobilenetv2(width_scale,
     root : str, default '~/.tensorflow/models'
         Location for keeping the model parameters.
     """
-
+    inputs = tf.keras.Input(shape=input_shape, name='input_image')
     init_block_channels = 32
     final_block_channels = 1280
     layers = [1, 2, 3, 4, 3, 3, 1]
@@ -184,33 +163,35 @@ def get_mobilenetv2(width_scale,
     from functools import reduce
     channels = reduce(lambda x, y: x + [[y[0]] * y[1]] if y[2] != 0 else x[:-1] + [x[-1] + [y[0]] * y[1]],
                       zip(channels_per_layers, layers, downsample), [[]])
+    
+    if model_size == 'S':
+        width_scale = 0.25
+    if model_size == 'M':
+        width_scale = 0.5
+    if model_size == 'L':
+        width_scale = 0.75
+    if model_size == 'XL':
+        width_scale = 1.0
 
     if width_scale != 1.0:
-        channels = [[int(cij * width_scale) for cij in ci] for ci in channels]
+        channels = [[ make_divisible(cij * width_scale) for cij in ci] for ci in channels]
         init_block_channels = int(init_block_channels * width_scale)
         if width_scale > 1.0:
             final_block_channels = int(final_block_channels * width_scale)
 
     net = MobileNetV2(
+        inputs=inputs,
+        training=training,
         channels=channels,
         init_block_channels=init_block_channels,
         final_block_channels=final_block_channels,
+        model_name='mobilenetv2_'+model_size,
         **kwargs)
 
-    if pretrained:
-        if (model_name is None) or (not model_name):
-            raise ValueError("Parameter `model_name` should be properly initialized for loading pretrained model.")
-        from .model_store import get_model_file
-        in_channels = kwargs["in_channels"] if ("in_channels" in kwargs) else 3
-        input_shape = (1,) + (in_channels,) + net.in_size if net.data_format == "channels_first" else\
-            (1,) + net.in_size + (in_channels,)
-        net.build(input_shape=input_shape)
-        net.load_weights(
-            filepath=get_model_file(
-                model_name=model_name,
-                local_model_store_dir_path=root))
 
     return net
+
+
 
 
 def mobilenetv2_w1(**kwargs):
@@ -304,4 +285,8 @@ def _test():
 
 
 if __name__ == "__main__":
-    _test()
+#     _test()
+    net = get_mobilenetv2(input_shape=(128, 416, 3),
+                        model_size='S',
+                        training=True)
+    net.summary()

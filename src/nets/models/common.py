@@ -6,7 +6,7 @@ __all__ = ['is_channels_first', 'get_channel_axis', 'round_channels', 'ReLU6', '
            'flatten', 'GluonBatchNormalization', 'MaxPool2d', 'AvgPool2d', 'Conv2d', 'conv1x1', 'conv3x3',
            'depthwise_conv3x3', 'ConvBlock', 'conv1x1_block', 'conv3x3_block', 'conv5x5_block', 'conv7x7_block',
            'dwconv3x3_block', 'dwconv5x5_block', 'PreConvBlock', 'pre_conv1x1_block', 'pre_conv3x3_block',
-           'ChannelShuffle', 'ChannelShuffle2', 'SEBlock']
+           'ChannelShuffle', 'ChannelShuffle2', 'SEBlock', 'make_divisible']
 
 import math
 from inspect import isfunction
@@ -14,6 +14,15 @@ import numpy as np
 import tensorflow as tf
 import tensorflow.keras.layers as nn
 
+def make_divisible(v, divisor=4, min_value=4):
+    if min_value is None:
+        min_value = divisor
+
+    new_v = max(min_value, int(v + divisor / 2) // divisor * divisor)
+    # Make sure that round down does not go down by more than 10%.
+    if new_v < 0.9 * v:
+        new_v += divisor
+    return new_v
 
 def is_channels_first(data_format):
     """

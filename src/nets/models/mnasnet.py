@@ -200,7 +200,7 @@ def MnasNet(inputs,
             in_channels=3,
             in_size=(224, 224),
             data_format="channels_last",
-            model_name='mnasnet'
+            model_name='mnasnet',
             **kwargs):
     """
     MnasNet model from 'MnasNet: Platform-Aware Neural Architecture Search for Mobile,'
@@ -333,7 +333,7 @@ def get_mnasnet(input_shape,
         raise ValueError("Unsupported MnasNet version {}".format(version))
     
     if model_size == 'S':
-        wid_scale = 0.5
+        width_scale = 0.5
     if model_size == 'M':
         width_scale = 1.0
     if model_size == 'L':
@@ -341,7 +341,7 @@ def get_mnasnet(input_shape,
 
     if width_scale != 1.0:
         channels = [[round_channels(cij * width_scale) for cij in ci] for ci in channels]
-        init_block_channels = round_channels(init_block_channels * width_scale)
+        init_block_channels = [round_channels(init * width_scale) for init in init_block_channels]
 
     net = MnasNet(
         inputs=inputs,
@@ -437,7 +437,7 @@ def _test():
 if __name__ == "__main__":
     # _test()
     net = get_mnasnet(input_shape=(128, 416, 3),
-                        version='ai',
-                        model_size='M',
+                        version='small',
+                        model_size='S',
                         training=True)
     net.summary()
