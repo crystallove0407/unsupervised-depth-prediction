@@ -12,6 +12,7 @@ from models.mobilenetv3 import get_mobilenetv3
 from models.mobilenetv2 import get_mobilenetv2
 from models.shufflenetv2 import get_shufflenetv2
 from models.mnasnet import get_mnasnet
+import time
 
 
 def get_encoder(net_name, input_shape, training=False):
@@ -29,8 +30,8 @@ def get_encoder(net_name, input_shape, training=False):
     
     if net_name == 'mnasnet':
         net = get_mnasnet(input_shape=input_shape,
-                        version='a1',
-                        model_size='M',
+                        version='small',
+                        model_size='S',
                         training=training)
     return net
 
@@ -53,9 +54,9 @@ def SubpixelConv2D(input_shape, scale=4, name='subpixel'):
 
 
 
-def Depth_net(input_shape=(128,416,3), training=False):
+def Depth_net(net_name, input_shape=(128,416,3), training=False):
     inputs = tf.keras.Input(shape=input_shape)
-    net = get_encoder(net_name='mobilenetv2', input_shape=input_shape, training=training)
+    net = get_encoder(net_name=net_name, input_shape=input_shape, training=training)
     feature = net(inputs)
     x, skip = feature
     
@@ -141,15 +142,46 @@ class get_pred(tf.keras.layers.Layer):
 
 
 
-if __name__ == '__main__':
-    net = Depth_net(input_shape=(256, 832, 3), training=False)
-    
-#     for var in net.trainable_variables:
-#         print(var.name)
-#     for wei in net.weights:
-#         print(wei)
-    
-#     for layer in net.layers:
-#         print(layer.name)
 
-    net.summary()
+if __name__ == '__main__':
+    tf.compat.v1.disable_eager_execution()
+#     if(tf.executing_eagerly()):
+#         print('[Info] Eager execution')
+#         print('Eager execution is enabled (running operations immediately)\n')
+#         print(('Turn eager execution off by running: \n{0}\n{1}').format('' \
+#             'from tensorflow.python.framework.ops import disable_eager_execution', \
+#             'tf.compat.v1.disable_eager_execution()'))
+#     else:
+#         print('[Info] Graph execution')
+#         print('You are not running eager execution. TensorFlow version >= 2.0.0' \
+#               'has eager execution enabled by default.')
+#         print(('Turn on eager execution by running: \n\n{0}\n\nOr upgrade '\
+#                'your tensorflow version by running:\n\n{1}').format(
+#                'tf.compat.v1.enable_eager_execution()',
+#                '!pip install --upgrade tensorflow\n' \
+#                '!pip install --upgrade tensorflow-gpu'))
+    
+    
+    @tf.function
+    def test(inputs, model):
+        x = model(inputs)
+    
+    model_name = ['shufflenetv2', 'mobilenetv2', 'mnasnet', 'mobilenetv3']
+    
+    #calculate fps
+    for name in model_name:
+        model = Depth_net(net_name=name, input_shape=(256, 832, 3), training=False)
+        model.summary()
+        
+        
+        averageFPS = 0
+        for times in range(10):
+            start_time = time.time()
+            for num in range(10):
+                x = tf.random.normal((1, 256, 832, 3))
+                test(x, model)
+            total_time = time.time() - start_time
+            FPS = 10 / total_time
+            averageFPS += FPS
+        averageFPS /= 10
+        print("[Info] {:>15} FPS: {:.3f}".format(name, averageFPS))

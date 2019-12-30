@@ -33,7 +33,6 @@ class ShuffleUnit(nn.Layer):
     data_format : str, default 'channels_last'
         The ordering of the dimensions in tensors.
     """
-
     def __init__(self,
                  in_channels,
                  out_channels,
@@ -107,7 +106,8 @@ class ShuffleUnit(nn.Layer):
             groups=2,
             data_format=data_format,
             name="c_shuffle")
-
+    
+#     @tf.function
     def call(self, x, training=None):
         if self.downsample:
             y1 = self.dw_conv4(x)
@@ -169,7 +169,8 @@ class ShuffleInitBlock(nn.Layer):
             ceil_mode=True,
             data_format=data_format,
             name="pool")
-
+    
+#     @tf.function
     def call(self, x, training=None):
         x1 = self.conv(x, training=training)
         x2 = self.pool(x1)
