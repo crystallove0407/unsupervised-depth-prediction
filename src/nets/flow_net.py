@@ -17,6 +17,7 @@ import tensorflow as tf
 import tensorflow.keras.layers as nn
 from models.common import conv1x1, depthwise_conv3x3, conv1x1_block, conv3x3_block, ChannelShuffle, SEBlock,\
     GluonBatchNormalization, MaxPool2d, get_channel_axis, flatten, dwconv3x3_block
+import time
 # tf.compat.v1.disable_v2_behavior()
 
 def flow_net(input_shape):
@@ -32,26 +33,26 @@ def flow_net(input_shape):
     feature_src1 = fpf(src1)
     
     flow = get_flow(input_shape)
-    src0_0, src0_1, src0_2, src0_3, src0_4, src0_5, src0_6 = feature_src0
-    tgt_0, tgt_1, tgt_2, tgt_3, tgt_4, tgt_5, tgt_6 = feature_tgt
-    src1_0, src1_1, src1_2, src1_3, src1_4, src1_5, src1_6 = feature_src1
+    src0_1, src0_2, src0_3, src0_4, src0_5, src0_6 = feature_src0
+    tgt_1, tgt_2, tgt_3, tgt_4, tgt_5, tgt_6 = feature_tgt
+    src1_1, src1_2, src1_3, src1_4, src1_5, src1_6 = feature_src1
     
     
      # foward warp: |01 |, | 12|, |0 2| ,direction: ->
-    flow_fw0 = flow(src0_0, src0_1, src0_2, src0_3, src0_4, src0_5, src0_6, 
-                    tgt_0, tgt_1, tgt_2, tgt_3, tgt_4, tgt_5, tgt_6)
-    flow_fw1 = flow(tgt_0, tgt_1, tgt_2, tgt_3, tgt_4, tgt_5, tgt_6, 
-                    src1_0, src1_1, src1_2, src1_3, src1_4, src1_5, src1_6)
-    flow_fw2 = flow(src0_0, src0_1, src0_2, src0_3, src0_4, src0_5, src0_6, 
-                    src1_0, src1_1, src1_2, src1_3, src1_4, src1_5, src1_6)
+    flow_fw0 = flow(src0_1, src0_2, src0_3, src0_4, src0_5, src0_6, 
+                    tgt_1, tgt_2, tgt_3, tgt_4, tgt_5, tgt_6)
+    flow_fw1 = flow(tgt_1, tgt_2, tgt_3, tgt_4, tgt_5, tgt_6, 
+                    src1_1, src1_2, src1_3, src1_4, src1_5, src1_6)
+    flow_fw2 = flow(src0_1, src0_2, src0_3, src0_4, src0_5, src0_6, 
+                    src1_1, src1_2, src1_3, src1_4, src1_5, src1_6)
 
     # backward warp: |01 |, | 12|, |0 2| , direction: <-
-    flow_bw0 = flow(tgt_0, tgt_1, tgt_2, tgt_3, tgt_4, tgt_5, tgt_6, 
-                    src0_0, src0_1, src0_2, src0_3, src0_4, src0_5, src0_6)
-    flow_bw1 = flow(src1_0, src1_1, src1_2, src1_3, src1_4, src1_5, src1_6, 
-                    tgt_0, tgt_1, tgt_2, tgt_3, tgt_4, tgt_5, tgt_6)
-    flow_bw2 = flow(src1_0, src1_1, src1_2, src1_3, src1_4, src1_5, src1_6, 
-                    src0_0, src0_1, src0_2, src0_3, src0_4, src0_5, src0_6)
+    flow_bw0 = flow(tgt_1, tgt_2, tgt_3, tgt_4, tgt_5, tgt_6, 
+                    src0_1, src0_2, src0_3, src0_4, src0_5, src0_6)
+    flow_bw1 = flow(src1_1, src1_2, src1_3, src1_4, src1_5, src1_6, 
+                    tgt_1, tgt_2, tgt_3, tgt_4, tgt_5, tgt_6)
+    flow_bw2 = flow(src1_1, src1_2, src1_3, src1_4, src1_5, src1_6, 
+                    src0_1, src0_2, src0_3, src0_4, src0_5, src0_6)
     
     model = tf.keras.Model(inputs=[src0, tgt, src1], 
                            outputs=[flow_fw0, flow_fw1, flow_fw2,
@@ -61,7 +62,22 @@ def flow_net(input_shape):
     
     return model
 
-def get_allShape(input_shape, d=4):
+
+
+class get_flow(nn.Layer):
+    def __init__(self, input_shape):
+        super().__init__(self)
+        self.d = 4
+        self.shape, self.decoder_shape = self.get_allShape(input_shape, d=self.d)
+        self.context = context_net()
+        self.decoder2 = pwc_decoder(self.decoder_shape[0])
+        self.decoder3 = pwc_decoder(self.decoder_shape[1])
+        self.decoder4 = pwc_decoder(self.decoder_shape[2])
+        self.decoder5 = pwc_decoder(self.decoder_shape[3])
+        self.decoder6 = pwc_decoder(self.decoder_shape[4])
+    
+    
+    def get_allShape(self, input_shape, d=4):
         ''' 列出6種 size的 hight & width
         list[6]: 0->origin size, ..., 5-> (origin // 2 ** 5)'''
         h, w, c = input_shape
@@ -77,95 +93,61 @@ def get_allShape(input_shape, d=4):
                         (h // 2**6, w // 2**6, cv_channel)]     
 
         return shape, decoder_shape
+    
+    @tf.function
+    def call(self, f11, f12, f13, f14, f15, f16,
+                    f21, f22, f23, f24, f25, f26):
+        
+        # Block6
+        cv6 = cost_volumn(f16, f26, d=self.d)
+        flow6, _ = self.decoder6(cv6)
 
-def get_flow(input_shape):
-    d = 4
-    shape, decoder_shape = get_allShape(input_shape, d=d)
-    
-    f11 = tf.keras.Input(shape=np.asarray(input_shape) // 2**1, name='f11')
-    f12 = tf.keras.Input(shape=np.asarray(input_shape) // 2**2, name='f12')
-    f13 = tf.keras.Input(shape=np.asarray(input_shape) // 2**3, name='f13')
-    f14 = tf.keras.Input(shape=np.asarray(input_shape) // 2**4, name='f14')
-    f15 = tf.keras.Input(shape=np.asarray(input_shape) // 2**5, name='f15')
-    f16 = tf.keras.Input(shape=np.asarray(input_shape) // 2**6, name='f16')
-    f21 = tf.keras.Input(shape=np.asarray(input_shape) // 2**1, name='f21')
-    f22 = tf.keras.Input(shape=np.asarray(input_shape) // 2**2, name='f22')
-    f23 = tf.keras.Input(shape=np.asarray(input_shape) // 2**3, name='f23')
-    f24 = tf.keras.Input(shape=np.asarray(input_shape) // 2**4, name='f24')
-    f25 = tf.keras.Input(shape=np.asarray(input_shape) // 2**5, name='f25')
-    f26 = tf.keras.Input(shape=np.asarray(input_shape) // 2**6, name='f26')
-    
-#     cost_vol = cost_volumn(d=d)
-    context = context_net()
-    decoder2 = pwc_decoder()
-    decoder3 = pwc_decoder()
-    decoder4 = pwc_decoder()
-    decoder5 = pwc_decoder()
-    decoder6 = pwc_decoder()
-    
-    
-    # Block6
-    print('[Info] Go to cost_vol')
-    cv6 = cost_volumn(f16, f26, d=d)
-    print('[Info] Exit cost_vol')
-    print('[Info] Go to decoder6')
-    flow6, _ = decoder6(cv6)
-    print('[Info] Exit decoder6')
+        # Block5
+        flow65 = tf.scalar_mul(2, tf.image.resize(flow6, self.shape[5], method=tf.image.ResizeMethod.BILINEAR))
+        f25_warp = transformer_old(f25, flow65, self.shape[5])
+        cv5 = cost_volumn(f15, f25_warp, d=self.d)
+        flow5, _ = self.decoder5(tf.concat([cv5, f15, flow65], axis=3)) #2
+        flow5 = tf.math.add(flow5, flow65)
 
-    # Block5
-    flow65 = tf.scalar_mul(2, tf.image.resize(flow6, shape[5], method=tf.image.ResizeMethod.BILINEAR))
-    print('[Info] Go to transformer_old')
-    f25_warp = transformer_old(f25, flow65, shape[5])
-    print('[Info] Exit transformer_old')
-    print('[Info] Go to cost_vol')
-    cv5 = cost_volumn(f15, f25_warp, d=d)
-    print('[Info] Exit cost_vol')
-    print('[Info] Go to decoder5')
-    flow5, _ = decoder5(tf.concat([cv5, f15, flow65], axis=3)) #2
-    print('[Info] Exit decoder5')
-    flow5 = tf.math.add(flow5, flow65)
+        # Block4
+        flow54 = tf.scalar_mul(2.0, tf.image.resize(flow5, self.shape[4], method=tf.image.ResizeMethod.BILINEAR))
+        f24_warp = transformer_old(f24, flow54, self.shape[4])
+        cv4 = cost_volumn(f14, f24_warp, d=self.d)
+        flow4, _ = self.decoder4(tf.concat([cv4, f14, flow54], axis=3)) #2
+        flow4 = tf.math.add(flow4, flow54)
 
-    # Block4
-    flow54 = tf.scalar_mul(2.0, tf.image.resize(flow5, shape[4], method=tf.image.ResizeMethod.BILINEAR))
-    f24_warp = transformer_old(f24, flow54, shape[4])
-    cv4 = cost_volumn(f14, f24_warp, d=d)
-    flow4, _ = decoder4(tf.concat([cv4, f14, flow54], axis=3)) #2
-    flow4 = tf.math.add(flow4, flow54)
+        # Block3
+        flow43 = tf.scalar_mul(2.0 ,tf.image.resize(flow4, self.shape[3],
+                                                 method=tf.image.ResizeMethod.BILINEAR))
+        f23_warp = transformer_old(f23, flow43, self.shape[3])
+        cv3 = cost_volumn(f13, f23_warp, d=self.d)
+        flow3, _ = self.decoder3(tf.concat([cv3, f13, flow43], axis=3)) #2
+        flow3 = tf.math.add(flow3, flow43)
+        # Block2
+        flow32 = tf.scalar_mul(2.0, tf.image.resize(flow3, self.shape[2], method=tf.image.ResizeMethod.BILINEAR))
+        f22_warp = transformer_old(f22, flow32, self.shape[2])
+        cv2 = cost_volumn(f12, f22_warp, d=self.d)
+        flow2, flow2_ = self.decoder2(tf.concat([cv2, f12, flow32], axis=3)) #2
+        flow2 = tf.math.add(flow2, flow32) #10
+        
+        
+        
+        
+        # context_net
+        flow2 = self.context(tf.concat([flow2, flow2_], axis=3))
+        flow2 = tf.math.add(flow2, flow2)
 
-    # Block3
-    flow43 = tf.scalar_mul(2.0 ,tf.image.resize(flow4, shape[3],
-                                             method=tf.image.ResizeMethod.BILINEAR))
-    f23_warp = transformer_old(f23, flow43, shape[3])
-    cv3 = cost_volumn(f13, f23_warp, d=d)
-    flow3, _ = decoder3(tf.concat([cv3, f13, flow43], axis=3)) #2
-    flow3 = tf.math.add(flow3, flow43)
-    # Block2
-    flow32 = tf.scalar_mul(2.0, tf.image.resize(flow3, shape[2], method=tf.image.ResizeMethod.BILINEAR))
-    f22_warp = transformer_old(f22, flow32, shape[2])
-    cv2 = cost_volumn(f12, f22_warp, d=d)
-    flow2, flow2_ = decoder2(tf.concat([cv2, f12, flow32], axis=3)) #2
-    flow2 = tf.math.add(flow2, flow32) #10
-    
-    # context_net
-    flow2 = context(tf.concat([flow2, flow2_], axis=3))
-    flow2 = tf.math.add(flow2, flow2)
-    
-    flow0_enlarge = tf.image.resize(
-            tf.scalar_mul(4.0,flow2), self.shape[0], method=tf.image.ResizeMethod.BILINEAR)
-    flow1_enlarge = tf.image.resize(
-            tf.scalar_mul(4.0,flow3), self.shape[1], method=tf.image.ResizeMethod.BILINEAR)
-    flow2_enlarge = tf.image.resize(
-            tf.scalar_mul(4.0,flow4), self.shape[2], method=tf.image.ResizeMethod.BILINEAR)
-    flow3_enlarge = tf.image.resize(
-            tf.scalar_mul(4.0,flow5), self.shape[3], method=tf.image.ResizeMethod.BILINEAR)
-    
-    model = tf.keras.Model(inputs=[f11, f12, f13, f14, f15, f16,
-                                  f21, f22, f23, f24, f25, f26], 
-                           outputs=[flow0_enlarge, flow1_enlarge, flow2_enlarge, flow3_enlarge], 
-                           name='flow_net')
-    model.summary()
-    
-    return model
+        flow0_enlarge = tf.image.resize(
+                tf.scalar_mul(4.0, flow2), self.shape[0], method=tf.image.ResizeMethod.BILINEAR)
+        flow1_enlarge = tf.image.resize(
+                tf.scalar_mul(4.0, flow3), self.shape[1], method=tf.image.ResizeMethod.BILINEAR)
+        flow2_enlarge = tf.image.resize(
+                tf.scalar_mul(4.0, flow4), self.shape[2], method=tf.image.ResizeMethod.BILINEAR)
+        flow3_enlarge = tf.image.resize(
+                tf.scalar_mul(4.0, flow5), self.shape[3], method=tf.image.ResizeMethod.BILINEAR)
+        
+        
+        return flow0_enlarge, flow1_enlarge, flow2_enlarge, flow3_enlarge
     
 
 
@@ -189,55 +171,39 @@ def cost_volumn(feature1, feature2, d=4):
 def feature_pyramid_flow(input_shape):
     inputs = tf.keras.Input(shape=input_shape, name='input_image')
     
-    cnv1 = conv3x3_block(3, 16, strides=2, padding=1, use_bn=False, activation='leaky_relu')(inputs)
-    cnv2 = conv3x3_block(16, 16, use_bn=False, activation='leaky_relu')(cnv1)
-    cnv3 = conv3x3_block(16, 32, strides=2, padding=1, use_bn=False, activation='leaky_relu')(cnv2)
-    cnv4 = conv3x3_block(32, 32, use_bn=False, activation='leaky_relu')(cnv3)
-    cnv5 = conv3x3_block(32, 64, strides=2, padding=1, use_bn=False, activation='leaky_relu')(cnv4)
-    cnv6 = conv3x3_block(64, 64, use_bn=False, activation='leaky_relu')(cnv5)
-    cnv7 = conv3x3_block(16, 96, strides=2, padding=1, use_bn=False, activation='leaky_relu')(cnv6)
-    cnv8 = conv3x3_block(32, 96, use_bn=False, activation='leaky_relu')(cnv7)
-    cnv9 = conv3x3_block(16, 128, strides=2, padding=1, use_bn=False, activation='leaky_relu')(cnv8)
-    cnv10 = conv3x3_block(32, 128, use_bn=False, activation='leaky_relu')(cnv9)
-    cnv11 = conv3x3_block(16, 192, strides=2, padding=1, use_bn=False, activation='leaky_relu')(cnv10)
-    cnv12 = conv3x3_block(32, 192, use_bn=False, activation='leaky_relu')(cnv11)
+    cnv1 = conv3x3_block(3, 16, strides=2, padding=1, use_bn=False, activation=nn.LeakyReLU(alpha=0.1))(inputs)
+    cnv2 = conv3x3_block(16, 16, use_bn=False, activation=nn.LeakyReLU(alpha=0.1))(cnv1)
+    cnv3 = conv3x3_block(16, 32, strides=2, padding=1, use_bn=False, activation=nn.LeakyReLU(alpha=0.1))(cnv2)
+    cnv4 = conv3x3_block(32, 32, use_bn=False, activation=nn.LeakyReLU(alpha=0.1))(cnv3)
+    cnv5 = conv3x3_block(32, 64, strides=2, padding=1, use_bn=False, activation=nn.LeakyReLU(alpha=0.1))(cnv4)
+    cnv6 = conv3x3_block(64, 64, use_bn=False, activation=nn.LeakyReLU(alpha=0.1))(cnv5)
+    cnv7 = conv3x3_block(16, 96, strides=2, padding=1, use_bn=False, activation=nn.LeakyReLU(alpha=0.1))(cnv6)
+    cnv8 = conv3x3_block(32, 96, use_bn=False, activation=nn.LeakyReLU(alpha=0.1))(cnv7)
+    cnv9 = conv3x3_block(16, 128, strides=2, padding=1, use_bn=False, activation=nn.LeakyReLU(alpha=0.1))(cnv8)
+    cnv10 = conv3x3_block(32, 128, use_bn=False, activation=nn.LeakyReLU(alpha=0.1))(cnv9)
+    cnv11 = conv3x3_block(16, 192, strides=2, padding=1, use_bn=False, activation=nn.LeakyReLU(alpha=0.1))(cnv10)
+    cnv12 = conv3x3_block(32, 192, use_bn=False, activation=nn.LeakyReLU(alpha=0.1))(cnv11)
     
     layers = tf.keras.Model(inputs=inputs, 
                             outputs=[cnv2, cnv4, cnv6, cnv8, cnv10, cnv12],
                             name='feature_pyramid_flow')
+ 
     return layers    
-    
-# def pwc_decoder(input_shape):
-#     inputs = tf.keras.Input(shape=input_shape, name='input_image')
-    
-#     cnv1 = conv3x3_block(128, 128, use_bn=False, activation='leaky_relu')(inputs)
-#     cnv2 = conv3x3_block(128, 128, use_bn=False, activation='leaky_relu')(cnv1)
-#     cnv3 = conv3x3_block(128, 96, use_bn=False, activation='leaky_relu')(nn.concatenate([cnv1, cnv2]))
-#     cnv4 = conv3x3_block(96, 64, use_bn=False, activation='leaky_relu')(nn.concatenate([cnv2, cnv3]))
-#     cnv5 = conv3x3_block(64, 32, use_bn=False, activation='leaky_relu')(nn.concatenate([cnv3, cnv4]))
-#     cnv6 = conv3x3_block(32, 2, use_bn=False)(nn.concatenate([cnv4, cnv5]))
-#     layers = tf.keras.Model(inputs=inputs, outputs=[cnv6, cnv5], name='pwc_decoder')
-#     return layers
 
-class pwc_decoder(tf.keras.Model):
-    def __init__(self):
-        super().__init__(self)
-        self.cnv1 = conv3x3_block(128, 128, use_bn=False, activation='leaky_relu')
-        self.cnv2 = conv3x3_block(128, 128, use_bn=False, activation='leaky_relu')
-        self.cnv3 = conv3x3_block(128, 96, use_bn=False, activation='leaky_relu')
-        self.cnv4 = conv3x3_block(96, 64, use_bn=False, activation='leaky_relu')
-        self.cnv5 = conv3x3_block(64, 32, use_bn=False, activation='leaky_relu')
-        self.cnv6 = conv3x3_block(32, 2, use_bn=False)
+
+def pwc_decoder(input_shape):
+    inputs = tf.keras.Input(shape=input_shape, name='input_image')
     
-    def call(self, inputs):
-        cnv1 = self.cnv1(inputs)
-        cnv2 = self.cnv2(cnv1)
-        cnv3 = self.cnv3(nn.concatenate([cnv1, cnv2]))
-        cnv4 = self.cnv4(nn.concatenate([cnv2, cnv3]))
-        cnv5 = self.cnv5(nn.concatenate([cnv3, cnv4]))
-        cnv6 = self.cnv6(nn.concatenate([cnv4, cnv5]))
-        
-        return cnv6, cnv5
+    cnv1 = conv3x3_block(128, 128, use_bn=False, activation=nn.LeakyReLU(alpha=0.1))(inputs)
+    cnv2 = conv3x3_block(128, 128, use_bn=False, activation=nn.LeakyReLU(alpha=0.1))(cnv1)
+    cnv3 = conv3x3_block(128, 96, use_bn=False, activation=nn.LeakyReLU(alpha=0.1))(nn.concatenate([cnv1, cnv2]))
+    cnv4 = conv3x3_block(96, 64, use_bn=False, activation=nn.LeakyReLU(alpha=0.1))(nn.concatenate([cnv2, cnv3]))
+    cnv5 = conv3x3_block(64, 32, use_bn=False, activation=nn.LeakyReLU(alpha=0.1))(nn.concatenate([cnv3, cnv4]))
+    cnv6 = conv3x3_block(32, 2, use_bn=False)(nn.concatenate([cnv4, cnv5]))
+    layers = tf.keras.Model(inputs=inputs, outputs=[cnv6, cnv5], name='pwc_decoder')
+
+    return layers
+
         
 def context_net():
     layers = tf.keras.Sequential(name='context_net')
@@ -248,18 +214,18 @@ def context_net():
     layers.add(nn.Conv2D(64, 3, dilation_rate=16, padding='same', use_bias=False, activation=nn.LeakyReLU(alpha=0.1)))
     layers.add(nn.Conv2D(32, 3, dilation_rate=1, padding='same', use_bias=False, activation=nn.LeakyReLU(alpha=0.1)))
     layers.add(nn.Conv2D(2, 3, dilation_rate=1, padding='same', use_bias=False, activation=None))
-    
+
     return layers
 
 
 
 
+# @tf.function
+# def leaky_relu(_x, alpha=0.1):
+#     pos = tf.nn.relu(_x)
+#     neg = alpha * (_x - abs(_x)) * 0.5
 
-def leaky_relu(_x, alpha=0.1):
-    pos = tf.nn.relu(_x)
-    neg = alpha * (_x - abs(_x)) * 0.5
-
-    return pos + neg
+#     return pos + neg
 
 
 
@@ -448,12 +414,12 @@ if __name__ == '__main__':
     model = flow_net(input_shape=(256, 832, 3))
     
     
-    for var in net.trainable_variables:
+    for var in model.trainable_variables:
         print(var.name)
 #     for wei in net.weights:
 #         print(wei)
     
-    for layer in net.layers:
+    for layer in model.layers:
         print(layer.name)
     model.summary()
         
@@ -463,9 +429,12 @@ if __name__ == '__main__':
         start_time = time.time()
         for num in range(10):
             x = tf.random.normal((1, 256, 832, 3))
-            test(x, model)
+            y = tf.random.normal((1, 256, 832, 3))
+            z = tf.random.normal((1, 256, 832, 3))
+            
+            test([x, y, z], model)
         total_time = time.time() - start_time
         FPS = 10 / total_time
         averageFPS += FPS
     averageFPS /= 10
-    print("[Info] {:>15} FPS: {:.3f}".format(name, averageFPS))
+    print("[Info] Flow Net FPS: {:.3f}".format(averageFPS))
