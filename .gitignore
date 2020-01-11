@@ -9,3 +9,7 @@ __pycache__
 core.*
 
 .vscode
+
+*.jpg
+
+*.png

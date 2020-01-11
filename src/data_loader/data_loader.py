@@ -11,6 +11,7 @@ class DataLoader():
                  dataset_dir, 
                  img_height, 
                  img_width, 
+                 split='train', #'train',  'val'
                  num_source=2, 
                  num_threads=32,
                  batch_size=4, 
@@ -33,7 +34,7 @@ class DataLoader():
         self.random_scale_crop = random_scale_crop
         self.shuffle = shuffle
         
-        self.split = 'val' # 'train', 'val': Dataset切的集合
+        self.split = split # 'train', 'val': Dataset切的集合
         self.feature_description = { # 定义Feature结构，告诉解码器每个Feature的类型是什么
             'image': tf.io.FixedLenFeature([], tf.string),
             'cam': tf.io.FixedLenFeature([], tf.string),
@@ -54,28 +55,28 @@ class DataLoader():
         raw_dataset = tf.data.TFRecordDataset(tfrecord_file)    # 读取 TFRecord 文件
         
         
-        dataset = raw_dataset.map(self._parse_example)
+        dataset = raw_dataset.map(self._parse_example, num_parallel_calls=tf.data.experimental.AUTOTUNE)
         
         if self.mode == "train_flow":
-            dataset = dataset.map(self.preprocess_image)
-            dataset = dataset.map(self.unpack_images)
+            dataset = dataset.map(self.preprocess_image, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+            dataset = dataset.map(self.unpack_images, num_parallel_calls=tf.data.experimental.AUTOTUNE)
             
             
         elif self.mode == "train_dp":
-            dataset = dataset.map(self.preprocess_image)
+            dataset = dataset.map(self.preprocess_image, num_parallel_calls=tf.data.experimental.AUTOTUNE)
             if self.random_color:
-                dataset = dataset.map(self.augment_image_colorspace)
-            dataset = dataset.map(self.unpack_images)
+                dataset = dataset.map(self.augment_image_colorspace, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+            dataset = dataset.map(self.unpack_images, num_parallel_calls=tf.data.experimental.AUTOTUNE)
 
             if self.flipping_mode != 'none':
                 if self.flipping_mode == 'random':
-                    dataset = dataset.map(self.random_flip)
+                    dataset = dataset.map(self.random_flip, num_parallel_calls=tf.data.experimental.AUTOTUNE)
 
                 elif self.flipping_mode == 'always':
-                    dataset = dataset.map(self.flip)
+                    dataset = dataset.map(self.flip, num_parallel_calls=tf.data.experimental.AUTOTUNE)
 
             if self.random_scale_crop:
-                dataset = dataset.map(self.augment_images_scale_crop)
+                dataset = dataset.map(self.augment_images_scale_crop, num_parallel_calls=tf.data.experimental.AUTOTUNE)
 
         return dataset
 

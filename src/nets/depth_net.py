@@ -5,13 +5,13 @@ import numpy as np
 import os
 import tensorflow as tf
 import tensorflow.keras.layers as nn
-from models.common import conv1x1, depthwise_conv3x3, conv1x1_block, conv3x3_block, ChannelShuffle, SEBlock,\
+from .models.common import conv1x1, depthwise_conv3x3, conv1x1_block, conv3x3_block, ChannelShuffle, SEBlock,\
     GluonBatchNormalization, MaxPool2d, get_channel_axis, flatten, dwconv3x3_block, conv1x1
 
-from models.mobilenetv3 import get_mobilenetv3
-from models.mobilenetv2 import get_mobilenetv2
-from models.shufflenetv2 import get_shufflenetv2
-from models.mnasnet import get_mnasnet
+from .models.mobilenetv3 import get_mobilenetv3
+from .models.mobilenetv2 import get_mobilenetv2
+from .models.shufflenetv2 import get_shufflenetv2
+from .models.mnasnet import get_mnasnet
 import time
 
 
@@ -166,12 +166,14 @@ if __name__ == '__main__':
     def test(inputs, model):
         x = model(inputs)
     
-    model_name = ['shufflenetv2', 'mobilenetv2', 'mnasnet', 'mobilenetv3']
-    
+#     model_name = ['shufflenetv2', 'mobilenetv2', 'mnasnet', 'mobilenetv3']
+    model_name = ['shufflenetv2']
     #calculate fps
     for name in model_name:
         model = Depth_net(net_name=name, input_shape=(256, 832, 3), training=False)
         model.summary()
+        for var in model.variables:
+            print(var)
         
         
         averageFPS = 0

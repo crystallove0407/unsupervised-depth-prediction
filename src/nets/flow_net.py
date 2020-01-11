@@ -15,54 +15,307 @@
 import numpy as np
 import tensorflow as tf
 import tensorflow.keras.layers as nn
-from models.common import conv1x1, depthwise_conv3x3, conv1x1_block, conv3x3_block, ChannelShuffle, SEBlock,\
+from .models.common import conv1x1, depthwise_conv3x3, conv1x1_block, conv3x3_block, ChannelShuffle, SEBlock,\
     GluonBatchNormalization, MaxPool2d, get_channel_axis, flatten, dwconv3x3_block
 import time
-# tf.compat.v1.disable_v2_behavior()
 
-def flow_net(input_shape):
-    src0 = tf.keras.Input(shape=input_shape, name='input_src0')
-    tgt = tf.keras.Input(shape=input_shape, name='input_tgt')
-    src1 = tf.keras.Input(shape=input_shape, name='input_src1')
-    
-    fpf = feature_pyramid_flow(input_shape)
+import sys
+sys.path.append('../kitti_eval/flow_tool/')
+sys.path.append('..')
+import flowlib as fl
+
+
+from utils.optical_flow_warp_fwd import TransformerFwd
+from utils.optical_flow_warp_old import transformer_old
+from utils.loss_utils import SSIM, cal_grad2_error_mask, charbonnier_loss, cal_grad2_error, compute_edge_aware_smooth_loss, ternary_loss, depth_smoothness
+from utils.utils import average_gradients, normalize_depth_for_display, preprocess_image, deprocess_image, inverse_warp, inverse_warp_new
+
+
+def Flow_net(input_shape):
+    inputs = tf.keras.Input(shape=input_shape, name='inputs')
+    src0 = inputs[:, :, :, :3]
+    tgt = inputs[:, :, :, 3:6]
+    src1 = inputs[:, :, :, 6:]
+#     src0 = tf.keras.Input(shape=input_shape, name='input_src0')
+#     tgt = tf.keras.Input(shape=input_shape, name='input_tgt')
+#     src1 = tf.keras.Input(shape=input_shape, name='input_src1')
+    feature_input_shape = input_shape
+    feature_input_shape[-1] = feature_input_shape[-1] // 3
+    fpf = feature_pyramid_flow(feature_input_shape)
     fpf.summary()
     
     feature_src0 = fpf(src0)
     feature_tgt = fpf(tgt)
     feature_src1 = fpf(src1)
     
+    
     flow = get_flow(input_shape)
-    src0_1, src0_2, src0_3, src0_4, src0_5, src0_6 = feature_src0
-    tgt_1, tgt_2, tgt_3, tgt_4, tgt_5, tgt_6 = feature_tgt
-    src1_1, src1_2, src1_3, src1_4, src1_5, src1_6 = feature_src1
-    
-    
+
      # foward warp: |01 |, | 12|, |0 2| ,direction: ->
-    flow_fw0 = flow(src0_1, src0_2, src0_3, src0_4, src0_5, src0_6, 
-                    tgt_1, tgt_2, tgt_3, tgt_4, tgt_5, tgt_6)
-    flow_fw1 = flow(tgt_1, tgt_2, tgt_3, tgt_4, tgt_5, tgt_6, 
-                    src1_1, src1_2, src1_3, src1_4, src1_5, src1_6)
-    flow_fw2 = flow(src0_1, src0_2, src0_3, src0_4, src0_5, src0_6, 
-                    src1_1, src1_2, src1_3, src1_4, src1_5, src1_6)
+    flow_fw0 = flow(feature_src0, feature_tgt)
+    flow_fw1 = flow(feature_tgt, feature_src1)
+    flow_fw2 = flow(feature_src0, feature_src1)
 
     # backward warp: |01 |, | 12|, |0 2| , direction: <-
-    flow_bw0 = flow(tgt_1, tgt_2, tgt_3, tgt_4, tgt_5, tgt_6, 
-                    src0_1, src0_2, src0_3, src0_4, src0_5, src0_6)
-    flow_bw1 = flow(src1_1, src1_2, src1_3, src1_4, src1_5, src1_6, 
-                    tgt_1, tgt_2, tgt_3, tgt_4, tgt_5, tgt_6)
-    flow_bw2 = flow(src1_1, src1_2, src1_3, src1_4, src1_5, src1_6, 
-                    src0_1, src0_2, src0_3, src0_4, src0_5, src0_6)
+    flow_bw0 = flow(feature_tgt, feature_src0)
+    flow_bw1 = flow(feature_src1, feature_tgt)
+    flow_bw2 = flow(feature_src1, feature_src0)
     
-    model = tf.keras.Model(inputs=[src0, tgt, src1], 
+#     flow_loss = Flow_loss()
+#     all_flow = flow_loss([[src0, tgt, src1], [flow_fw0, flow_fw1, flow_fw2,
+#                                     flow_bw0, flow_bw1, flow_bw2]])
+#     flow_fw0, flow_fw1, flow_fw2, flow_bw0, flow_bw1, flow_bw2 = all_flow
+
+    # 每個 flow_output shape: (n, 256, 832, 2), (n, 128, 416, 2), (n, 64, 208, 2), (n, 32, 104, 2)
+    model = tf.keras.Model(inputs=inputs, 
                            outputs=[flow_fw0, flow_fw1, flow_fw2,
                                     flow_bw0, flow_bw1, flow_bw2], 
                            name='flow_net')
     model.summary()
-    
+#     tf.keras.utils.plot_model(model, 'multi_input_and_output_model.png', show_shapes=True)
     return model
 
+# class Flow_loss(nn.Layer):
+#     def __init__(self):
+#         super().__init__(self)
+#         # Model Input 解析度設定
+#         self.batch_size = 8
+#         self.img_height = 256
+#         self.img_width = 832
+#         self.num_scale = 4
+#         self.num_source = 2
 
+#         # Loss Hyperparameters
+#         self.ssim_weight = 0.85
+#         self.flow_reconstruction_weight = 1.0
+#         self.flow_smooth_weight = 10.0
+#         self.flow_cross_geometry_weight = 0.3
+#         self.flow_diff_threshold = 4.0 #useless
+#         self.flow_consist_weight = 0.01 #useless
+    
+#     def occulsion(self, pred_flow, H, W):
+#         """
+#         Here, we compute the soft occlusion maps proposed in https://arxiv.org/pdf/1711.05890.pdf
+
+#         pred_flow: the estimated forward optical flow
+#         """
+#         transformerFwd = TransformerFwd()
+#         occu_mask = [
+#             tf.clip_by_value(
+#                 transformerFwd(
+#                     tf.ones(
+#                         shape=[self.batch_size, H, W, 1],
+#                         dtype='float32'),
+#                     pred_flow, [H , W]),
+#                 clip_value_min=0.0,
+#                 clip_value_max=1.0)
+#             ]
+#         occu_mask = tf.reshape(occu_mask, [self.batch_size, H, W, 1])
+#         occu_mask_avg = tf.reduce_mean(input_tensor=occu_mask)
+
+#         return occu_mask, occu_mask_avg
+    
+#     def build_flow_loss(self):
+#         reconstructed_loss = 0
+#         cross_reconstructed_loss = 0
+#         flow_smooth_loss = 0
+#         cross_flow_smooth_loss = 0
+#         ssim_loss = 0
+#         cross_ssim_loss = 0
+
+#         curr_tgt_image_all = []
+#         curr_src_image_stack_all = []
+#         occlusion_map_0_all = []
+#         occlusion_map_1_all = []
+#         occlusion_map_2_all = []
+#         occlusion_map_3_all = []
+#         occlusion_map_4_all = []
+#         occlusion_map_5_all = []
+
+#         # Calculate different scale occulsion maps described in 'Occlusion Aware Unsupervised
+#         # Learning of Optical Flow by Yang Wang et al'
+#         occu_masks_bw = []
+#         occu_masks_bw_avg = []
+#         occu_masks_fw = []
+#         occu_masks_fw_avg = []
+
+#         for i in range(len(self.pred_bw_flows)):
+#             temp_occu_masks_bw = []
+#             temp_occu_masks_bw_avg = []
+#             temp_occu_masks_fw = []
+#             temp_occu_masks_fw_avg = []
+
+#             for s in range(self.num_scale):
+#                 H = int(self.img_height / (2**s))
+#                 W = int(self.img_width  / (2**s))
+
+#                 mask, mask_avg = self.occulsion(self.pred_bw_flows[i][s], H, W)
+#                 temp_occu_masks_bw.append(mask)
+#                 temp_occu_masks_bw_avg.append(mask_avg)
+#                 # [src0, tgt, src0_1]
+
+#                 mask, mask_avg = self.occulsion(self.pred_fw_flows[i][s], H, W)
+#                 temp_occu_masks_fw.append(mask)
+#                 temp_occu_masks_fw_avg.append(mask_avg)
+#                 # [tgt, src1, src1_1]
+
+#             occu_masks_bw.append(temp_occu_masks_bw)
+#             occu_masks_bw_avg.append(temp_occu_masks_bw_avg)
+#             occu_masks_fw.append(temp_occu_masks_fw)
+#             occu_masks_fw_avg.append(temp_occu_masks_fw_avg)
+
+#         for s in range(self.num_scale):
+#             H = int(self.img_height / (2**s))
+#             W = int(self.img_width  / (2**s))
+#             curr_tgt_image = tf.image.resize(
+#                 self.tgt_image, [H, W], method=tf.image.ResizeMethod.AREA)
+#             curr_src_image_stack = tf.image.resize(
+#                 self.src_image_stack, [H, W], method=tf.image.ResizeMethod.AREA)
+
+#             curr_tgt_image_all.append(curr_tgt_image)
+#             curr_src_image_stack_all.append(curr_src_image_stack)
+
+#             # src0
+#             curr_proj_image_optical_src0 = transformer_old(curr_tgt_image, self.pred_fw_flows[0][s], [H, W])
+#             curr_proj_error_optical_src0 = tf.abs(curr_proj_image_optical_src0 - curr_src_image_stack[:,:,:,0:3])
+#             reconstructed_loss += tf.reduce_mean(
+#                 input_tensor=curr_proj_error_optical_src0 * occu_masks_bw[0][s]) / occu_masks_bw_avg[0][s]
+
+#             curr_proj_image_optical_src0_1 = transformer_old(curr_src_image_stack[:,:,:,3:6], self.pred_fw_flows[2][s], [H, W])
+#             curr_proj_error_optical_src0_1 = tf.abs(curr_proj_image_optical_src0_1 - curr_src_image_stack[:,:,:,0:3])
+#             cross_reconstructed_loss += tf.reduce_mean(
+#                 input_tensor=curr_proj_error_optical_src0_1 * occu_masks_bw[2][s]) / occu_masks_bw_avg[2][s]
+
+#             # tgt
+#             curr_proj_image_optical_tgt = transformer_old(curr_src_image_stack[:,:,:,3:6], self.pred_fw_flows[1][s], [H, W])
+#             curr_proj_error_optical_tgt = tf.abs(curr_proj_image_optical_tgt - curr_tgt_image)
+#             reconstructed_loss += tf.reduce_mean(
+#                 input_tensor=curr_proj_error_optical_tgt * occu_masks_bw[1][s]) / occu_masks_bw_avg[1][s]
+
+#             curr_proj_image_optical_tgt_1 = transformer_old(curr_src_image_stack[:,:,:,0:3], self.pred_bw_flows[0][s], [H, W])
+#             curr_proj_error_optical_tgt_1 = tf.abs(curr_proj_image_optical_tgt_1 - curr_tgt_image)
+#             reconstructed_loss += tf.reduce_mean(
+#                 input_tensor=curr_proj_error_optical_tgt_1 * occu_masks_fw[0][s]) / occu_masks_fw_avg[0][s]
+
+#             # src1
+#             curr_proj_image_optical_src1 = transformer_old(curr_tgt_image, self.pred_bw_flows[1][s], [H, W])
+#             curr_proj_error_optical_src1 = tf.abs(curr_proj_image_optical_src1 - curr_src_image_stack[:,:,:,3:6])
+#             reconstructed_loss += tf.reduce_mean(
+#                 input_tensor=curr_proj_error_optical_src1 * occu_masks_fw[1][s]) / occu_masks_fw_avg[1][s]
+
+#             curr_proj_image_optical_src1_1 = transformer_old(curr_src_image_stack[:,:,:,0:3], self.pred_bw_flows[2][s], [H, W])
+#             curr_proj_error_optical_src1_1 = tf.abs(curr_proj_image_optical_src1_1 - curr_src_image_stack[:,:,:,3:6])
+#             cross_reconstructed_loss += tf.reduce_mean(
+#                 input_tensor=curr_proj_error_optical_src1_1 * occu_masks_fw[2][s]) / occu_masks_fw_avg[2][s]
+
+#             if self.ssim_weight > 0:
+#                 # src0
+#                 ssim_loss += tf.reduce_mean(
+#                     input_tensor=SSIM(curr_proj_image_optical_src0 * occu_masks_bw[0][s],
+#                          curr_src_image_stack[:,:,:,0:3] * occu_masks_bw[0][s])) / occu_masks_bw_avg[0][s]
+
+#                 cross_ssim_loss += tf.reduce_mean(
+#                     input_tensor=SSIM(curr_proj_image_optical_src0_1 * occu_masks_bw[2][s],
+#                          curr_src_image_stack[:,:,:,0:3] * occu_masks_bw[2][s])) / occu_masks_bw_avg[2][s]
+
+#                 # tgt
+#                 ssim_loss += tf.reduce_mean(
+#                     input_tensor=SSIM(curr_proj_image_optical_tgt * occu_masks_bw[1][s],
+#                          curr_tgt_image * occu_masks_bw[1][s])) / occu_masks_bw_avg[1][s]
+
+#                 ssim_loss += tf.reduce_mean(
+#                     input_tensor=SSIM(curr_proj_image_optical_tgt_1 * occu_masks_fw[0][s],
+#                          curr_tgt_image * occu_masks_fw[0][s])) / occu_masks_fw_avg[0][s]
+
+#                 # src1
+#                 ssim_loss += tf.reduce_mean(
+#                     input_tensor=SSIM(curr_proj_image_optical_src1 * occu_masks_fw[1][s],
+#                          curr_src_image_stack[:,:,:,3:6] * occu_masks_fw[1][s])) / occu_masks_fw_avg[1][s]
+
+#                 cross_ssim_loss += tf.reduce_mean(
+#                     input_tensor=SSIM(curr_proj_image_optical_src1_1 * occu_masks_fw[2][s],
+#                          curr_src_image_stack[:,:,:,3:6] * occu_masks_fw[2][s])) / occu_masks_fw_avg[2][s]
+
+#             # Compute second-order derivatives for flow smoothness loss
+#             flow_smooth_loss += cal_grad2_error(
+#                 self.pred_fw_flows[0][s] / 20.0, curr_src_image_stack[:,:,:,0:3], 1.0)
+
+#             flow_smooth_loss += cal_grad2_error(
+#                 self.pred_fw_flows[1][s] / 20.0, curr_tgt_image, 1.0)
+
+#             cross_flow_smooth_loss += cal_grad2_error(
+#                 self.pred_fw_flows[2][s] / 20.0, curr_src_image_stack[:,:,:,0:3], 1.0)
+
+#             flow_smooth_loss += cal_grad2_error(
+#                 self.pred_bw_flows[0][s] / 20.0, curr_tgt_image, 1.0)
+
+#             flow_smooth_loss += cal_grad2_error(
+#                 self.pred_bw_flows[1][s] / 20.0, curr_src_image_stack[:,:,:,3:6], 1.0)
+
+#             cross_flow_smooth_loss += cal_grad2_error(
+#                 self.pred_bw_flows[2][s] / 20.0, curr_src_image_stack[:,:,:,3:6], 1.0)
+
+#             # [TODO] Add first-order derivatives for flow smoothness loss
+#             # [TODO] use robust Charbonnier penalty?
+
+#             if s == 0:
+#                 occlusion_map_0_all = occu_masks_bw[0][s]
+#                 occlusion_map_1_all = occu_masks_bw[1][s]
+#                 occlusion_map_2_all = occu_masks_bw[2][s]
+#                 occlusion_map_3_all = occu_masks_fw[0][s]
+#                 occlusion_map_4_all = occu_masks_fw[1][s]
+#                 occlusion_map_5_all = occu_masks_fw[2][s]
+
+#         self.total_losses = self.flow_reconstruction_weight * ((1.0 - self.ssim_weight) * \
+#                       (reconstructed_loss + self.flow_cross_geometry_weight*cross_reconstructed_loss) + \
+#                         self.ssim_weight*(ssim_loss+self.flow_cross_geometry_weight*cross_ssim_loss)) + \
+#                       self.flow_smooth_weight * (flow_smooth_loss + self.flow_cross_geometry_weight*cross_flow_smooth_loss)
+
+# #         summaries = []
+# #         summaries.append(tf.compat.v1.summary.scalar("total_losses", self.total_losses))
+# #         summaries.append(tf.compat.v1.summary.scalar("reconstructed_loss", reconstructed_loss))
+# #         summaries.append(tf.compat.v1.summary.scalar("cross_reconstructed_loss", cross_reconstructed_loss))
+# #         summaries.append(tf.compat.v1.summary.scalar("ssim_loss", ssim_loss))
+# #         summaries.append(tf.compat.v1.summary.scalar("cross_ssim_loss", cross_ssim_loss))
+# #         summaries.append(tf.compat.v1.summary.scalar("flow_smooth_loss", flow_smooth_loss))
+# #         summaries.append(tf.compat.v1.summary.scalar("cross_flow_smooth_loss", cross_flow_smooth_loss))
+
+# #         s = 0
+# #         tf.compat.v1.summary.image('scale%d_target_image' % s, tf.image.convert_image_dtype(curr_tgt_image_all[0], dtype=tf.uint8))
+
+# #         for i in range(self.num_source):
+# #             tf.compat.v1.summary.image('scale%d_src_image_%d' % (s, i), \
+# #                             tf.image.convert_image_dtype(curr_src_image_stack_all[0][:, :, :, i*3:(i+1)*3], dtype=tf.uint8))
+
+# #         tf.compat.v1.summary.image('scale%d_flow_src02tgt' % s, fl.flow_to_color(self.pred_fw_flows[0][s], max_flow=256))
+# #         tf.compat.v1.summary.image('scale%d_flow_tgt2src1' % s, fl.flow_to_color(self.pred_fw_flows[1][s], max_flow=256))
+# #         tf.compat.v1.summary.image('scale%d_flow_src02src1' % s, fl.flow_to_color(self.pred_fw_flows[2][s], max_flow=256))
+# #         tf.compat.v1.summary.image('scale%d_flow_tgt2src0' % s, fl.flow_to_color(self.pred_bw_flows[0][s], max_flow=256))
+# #         tf.compat.v1.summary.image('scale%d_flow_src12tgt' % s, fl.flow_to_color(self.pred_bw_flows[1][s], max_flow=256))
+# #         tf.compat.v1.summary.image('scale%d_flow_src12src0' % s, fl.flow_to_color(self.pred_bw_flows[2][s], max_flow=256))
+
+# #         tf.compat.v1.summary.image('scale_flyout_mask_src0', occlusion_map_0_all)
+# #         tf.compat.v1.summary.image('scale_flyout_mask_tgt', occlusion_map_1_all)
+# #         tf.compat.v1.summary.image('scale_flyout_mask_src0_1', occlusion_map_2_all)
+# #         tf.compat.v1.summary.image('scale_flyout_mask_tgt1', occlusion_map_3_all)
+# #         tf.compat.v1.summary.image('scale_flyout_mask_src1', occlusion_map_4_all)
+# #         tf.compat.v1.summary.image('scale_flyout_mask_src1_1', occlusion_map_5_all)
+
+# #         self.summ_op = tf.compat.v1.summary.merge(summaries)
+
+    
+#     def call(self, inputs):
+#         input_images, output_from_model = inputs
+#         self.tgt_image = input_images[1]
+#         self.src_image_stack = tf.concat([input_images[0], input_images[2]], axis=3)
+#         self.pred_fw_flows = output_from_model[:3]
+#         self.pred_bw_flows = output_from_model[3:]
+        
+#         self.build_flow_loss()
+        
+#         self.add_loss(self.total_losses, inputs=True)
+#         self.add_metric(self.total_losses, aggregation='mean', name="flow_loss")
+#         return output_from_model
 
 class get_flow(nn.Layer):
     def __init__(self, input_shape):
@@ -75,6 +328,22 @@ class get_flow(nn.Layer):
         self.decoder4 = pwc_decoder(self.decoder_shape[2])
         self.decoder5 = pwc_decoder(self.decoder_shape[3])
         self.decoder6 = pwc_decoder(self.decoder_shape[4])
+    
+    def cost_volumn(self, feature1, feature2, d=4):
+        n, h, w, c = feature1.get_shape().as_list()
+        feature2 = tf.pad(tensor=feature2, paddings=[[0, 0], [d, d], [
+                              d, d], [0, 0]], mode="CONSTANT")
+        cv = []
+        for i in range(2 * d + 1):
+            for j in range(2 * d + 1):
+                cv.append(
+                        tf.math.reduce_mean(
+                            input_tensor=feature1 *
+                            feature2[:, i:(i + h), j:(j + w), :],
+                            axis=3,
+                            keepdims=True))
+        x = tf.concat(cv, axis=3)
+        return x
     
     
     def get_allShape(self, input_shape, d=4):
@@ -95,24 +364,26 @@ class get_flow(nn.Layer):
         return shape, decoder_shape
     
     @tf.function
-    def call(self, f11, f12, f13, f14, f15, f16,
-                    f21, f22, f23, f24, f25, f26):
+    def call(self, flow1, flow2):
+        
+        f11, f12, f13, f14, f15, f16 = flow1
+        f21, f22, f23, f24, f25, f26 = flow2
         
         # Block6
-        cv6 = cost_volumn(f16, f26, d=self.d)
+        cv6 = self.cost_volumn(f16, f26, d=self.d)
         flow6, _ = self.decoder6(cv6)
 
         # Block5
         flow65 = tf.scalar_mul(2, tf.image.resize(flow6, self.shape[5], method=tf.image.ResizeMethod.BILINEAR))
         f25_warp = transformer_old(f25, flow65, self.shape[5])
-        cv5 = cost_volumn(f15, f25_warp, d=self.d)
+        cv5 = self.cost_volumn(f15, f25_warp, d=self.d)
         flow5, _ = self.decoder5(tf.concat([cv5, f15, flow65], axis=3)) #2
         flow5 = tf.math.add(flow5, flow65)
 
         # Block4
         flow54 = tf.scalar_mul(2.0, tf.image.resize(flow5, self.shape[4], method=tf.image.ResizeMethod.BILINEAR))
         f24_warp = transformer_old(f24, flow54, self.shape[4])
-        cv4 = cost_volumn(f14, f24_warp, d=self.d)
+        cv4 = self.cost_volumn(f14, f24_warp, d=self.d)
         flow4, _ = self.decoder4(tf.concat([cv4, f14, flow54], axis=3)) #2
         flow4 = tf.math.add(flow4, flow54)
 
@@ -120,22 +391,22 @@ class get_flow(nn.Layer):
         flow43 = tf.scalar_mul(2.0 ,tf.image.resize(flow4, self.shape[3],
                                                  method=tf.image.ResizeMethod.BILINEAR))
         f23_warp = transformer_old(f23, flow43, self.shape[3])
-        cv3 = cost_volumn(f13, f23_warp, d=self.d)
+        cv3 = self.cost_volumn(f13, f23_warp, d=self.d)
         flow3, _ = self.decoder3(tf.concat([cv3, f13, flow43], axis=3)) #2
         flow3 = tf.math.add(flow3, flow43)
         # Block2
         flow32 = tf.scalar_mul(2.0, tf.image.resize(flow3, self.shape[2], method=tf.image.ResizeMethod.BILINEAR))
         f22_warp = transformer_old(f22, flow32, self.shape[2])
-        cv2 = cost_volumn(f12, f22_warp, d=self.d)
-        flow2, flow2_ = self.decoder2(tf.concat([cv2, f12, flow32], axis=3)) #2
-        flow2 = tf.math.add(flow2, flow32) #10
+        cv2 = self.cost_volumn(f12, f22_warp, d=self.d)
+        flow2_raw, flow2_ = self.decoder2(tf.concat([cv2, f12, flow32], axis=3)) #2
+        flow2_raw = tf.math.add(flow2_raw, flow32) #10
         
         
         
         
         # context_net
-        flow2 = self.context(tf.concat([flow2, flow2_], axis=3))
-        flow2 = tf.math.add(flow2, flow2)
+        flow2 = self.context(tf.concat([flow2_raw, flow2_], axis=3))
+        flow2 = tf.math.add(flow2, flow2_raw)
 
         flow0_enlarge = tf.image.resize(
                 tf.scalar_mul(4.0, flow2), self.shape[0], method=tf.image.ResizeMethod.BILINEAR)
@@ -146,26 +417,12 @@ class get_flow(nn.Layer):
         flow3_enlarge = tf.image.resize(
                 tf.scalar_mul(4.0, flow5), self.shape[3], method=tf.image.ResizeMethod.BILINEAR)
         
-        
+        #output shape: (n, 256, 832, 2), (n, 128, 416, 2), (n, 64, 208, 2), (n, 32, 104, 2)
         return flow0_enlarge, flow1_enlarge, flow2_enlarge, flow3_enlarge
     
 
 
-def cost_volumn(feature1, feature2, d=4):
-    n, h, w, c = feature1.get_shape().as_list()
-    feature2 = tf.pad(tensor=feature2, paddings=[[0, 0], [d, d], [
-                          d, d], [0, 0]], mode="CONSTANT")
-    cv = []
-    for i in range(2 * d + 1):
-        for j in range(2 * d + 1):
-            cv.append(
-                    tf.math.reduce_mean(
-                        input_tensor=feature1 *
-                        feature2[:, i:(i + h), j:(j + w), :],
-                        axis=3,
-                        keepdims=True))
-    x = tf.concat(cv, axis=3)
-    return x
+
     
 
 def feature_pyramid_flow(input_shape):
@@ -411,7 +668,7 @@ if __name__ == '__main__':
     tgt = tf.random.normal((batch_size, 256, 832, 3))
     src1 = tf.random.normal((batch_size, 256, 832, 3))
     
-    model = flow_net(input_shape=(256, 832, 3))
+    model = Flow_net(input_shape=(256, 832, 3))
     
     
     for var in model.trainable_variables:
