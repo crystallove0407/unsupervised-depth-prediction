@@ -141,13 +141,11 @@ def transformer_old(U, flo, out_size, name='SpatialTransformer', **kwargs):
             x_t, y_t = _meshgrid(out_height, out_width)
             x_t = tf.expand_dims(x_t, 0)
             x_t = tf.tile(x_t, [num_batch, 1, 1])
-
             y_t = tf.expand_dims(y_t, 0)
             y_t = tf.tile(y_t, [num_batch, 1, 1])
-
-            x_s = x_t + flo[:, :, :, 0] / (
+            x_s = x_t + tf.identity(flo[:, :, :, 0]) / (
                 (tf.cast(out_width, tf.float32) - 1.0) / 2.0)
-            y_s = y_t + flo[:, :, :, 1] / (
+            y_s = y_t + tf.identity(flo[:, :, :, 1]) / (
                 (tf.cast(out_height, tf.float32) - 1.0) / 2.0)
 
             x_s_flat = tf.reshape(x_s, [-1])

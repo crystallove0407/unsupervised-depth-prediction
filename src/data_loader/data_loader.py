@@ -53,34 +53,34 @@ class DataLoader():
     def build_dataloader(self):
         tfrecord_file = self.dataset_dir + '/%s.tfrecords' % self.split
         raw_dataset = tf.data.TFRecordDataset(tfrecord_file)    # 读取 TFRecord 文件
+        dataset = raw_dataset.map(self._parse_example, num_parallel_calls=tf.data.experimental.AUTOTUNE) 
         
+        return dataset
+    
+    def _parse_example(self, example_string): # 将 TFRecord 文件中的每一个序列化的 tf.train.Example 解码
+        feature_dict = tf.io.parse_single_example(example_string, self.feature_description)
+        feature_dict['image'] = tf.io.decode_jpeg(feature_dict['image'])    # 解码JPEG图片
+        rec_def = []
+        for i in range(9):
+            rec_def.append([1.0])
+        raw_cam_vec = tf.io.decode_csv(records=feature_dict['cam'], record_defaults=rec_def)
+        raw_cam_vec = tf.stack(raw_cam_vec)
+        feature_dict['cam'] = tf.reshape(raw_cam_vec, [3, 3])
         
-        dataset = raw_dataset.map(self._parse_example, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        feature_dict['image'] = self.preprocess_image(feature_dict['image'])
+        feature_dict['image'] = self.augment_image_colorspace(feature_dict['image'])
+        feature_dict['image'] = self.unpack_images(feature_dict['image'])
         
-        if self.mode == "train_flow":
-            dataset = dataset.map(self.preprocess_image, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-            dataset = dataset.map(self.unpack_images, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-            
-            
-        elif self.mode == "train_dp":
-            dataset = dataset.map(self.preprocess_image, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-            if self.random_color:
-                dataset = dataset.map(self.augment_image_colorspace, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-            dataset = dataset.map(self.unpack_images, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-
+        if self.mode == "train_dp":
             if self.flipping_mode != 'none':
                 if self.flipping_mode == 'random':
-                    dataset = dataset.map(self.random_flip, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-
+                    feature_dict = self.random_flip(feature_dict)
                 elif self.flipping_mode == 'always':
-                    dataset = dataset.map(self.flip, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-
+                    feature_dict = self.flip(feature_dict)
             if self.random_scale_crop:
-                dataset = dataset.map(self.augment_images_scale_crop, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+                feature_dict = self.augment_images_scale_crop(feature_dict)
 
-        return dataset
-
-
+        return feature_dict['image']
 
 
     
@@ -113,24 +113,16 @@ class DataLoader():
                 example = tf.train.Example(features=tf.train.Features(feature=feature)) # 通过字典建立 Example
                 writer.write(example.SerializeToString())   # 将Example序列化并写入 TFRecord 文件
                 
-    def _parse_example(self, example_string): # 将 TFRecord 文件中的每一个序列化的 tf.train.Example 解码
-        feature_dict = tf.io.parse_single_example(example_string, self.feature_description)
-        feature_dict['image'] = tf.io.decode_jpeg(feature_dict['image'])    # 解码JPEG图片
-        rec_def = []
-        for i in range(9):
-            rec_def.append([1.0])
-        raw_cam_vec = tf.io.decode_csv(records=feature_dict['cam'], record_defaults=rec_def)
-        raw_cam_vec = tf.stack(raw_cam_vec)
-        feature_dict['cam'] = tf.reshape(raw_cam_vec, [3, 3])
-
-        return feature_dict['image'], feature_dict['cam']
-
-    def preprocess_image(self, image, cam):
+    
+    
+    
+    
+    def preprocess_image(self, image):
         # Convert from uint8 to float.
         image = tf.image.convert_image_dtype(image, dtype=tf.float32)
-        return image, cam
+        return image
 
-    def augment_image_colorspace(self, image_stack, cam):
+    def augment_image_colorspace(self, image_stack):
         """Apply data augmentation to inputs."""
         image_stack_aug = image_stack
         # Randomly shift brightness.
@@ -166,9 +158,9 @@ class DataLoader():
             false_fn=lambda: image_stack_aug)
 
         image_stack_aug = tf.clip_by_value(image_stack_aug, 0, 1)
-        return image_stack_aug, cam
+        return image_stack_aug
 
-    def unpack_images(self, image_seq, cam):
+    def unpack_images(self, image_seq):
         """[h, w * seq_length, 3] -> [h, w, 3 * seq_length]."""
         image_list = [
             image_seq[:, i * self.img_width:(i + 1) * self.img_width, :]
@@ -176,23 +168,25 @@ class DataLoader():
         ]
         image_stack = tf.concat(image_list, axis=2)
         image_stack.set_shape([self.img_height, self.img_width, self.seq_length * 3])
-        return image_stack, cam
+        return image_stack
 
-    def flip(self, image_stack, intrinsics):
+    def flip(self, inputs):
+        image_stack, intrinsics = inputs['image'], inputs['cam']
         _, in_w, _ = image_stack.get_shape().as_list()
         fx = intrinsics[0, 0]
         fy = intrinsics[1, 1]
         cx = in_w - intrinsics[0, 2]
         cy = intrinsics[1, 2]
-        intrinsics = self.make_intrinsics_matrix(fx, fy, cx, cy)
-        return tf.image.flip_left_right(image_stack), intrinsics
+        inputs['cam'] = self.make_intrinsics_matrix(fx, fy, cx, cy)
+        inputs['image'] = tf.image.flip_left_right(image_stack)
+        return inputs
 
-    def random_flip(self, image_stack, intrinsics):
+    def random_flip(self, inputs):
         prob = tf.random.uniform(shape=[], minval=0.0, maxval=1.0, dtype=tf.float32)
         predicate = tf.less(prob, 0.5)
         return tf.cond(pred=predicate,
-                       true_fn=lambda: self.flip(image_stack, intrinsics),
-                       false_fn=lambda: (image_stack, intrinsics))
+                       true_fn=lambda: self.flip(inputs),
+                       false_fn=lambda: inputs)
 
     def make_intrinsics_matrix(self, fx, fy, cx, cy):
         r1 = tf.stack([fx, 0, cx])
@@ -201,7 +195,7 @@ class DataLoader():
         intrinsics = tf.stack([r1, r2, r3])
         return intrinsics
 
-    def augment_images_scale_crop(self, im, intrinsics):
+    def augment_images_scale_crop(self, inputs):
         """Randomly scales and crops image."""
 
         def scale_randomly(im, intrinsics):
@@ -238,9 +232,9 @@ class DataLoader():
             intrinsics = self.make_intrinsics_matrix(fx, fy, cx, cy)
             return im, intrinsics
 
-        im, intrinsics = scale_randomly(im, intrinsics)
-        im, intrinsics = crop_randomly(im, intrinsics, out_h=self.img_height, out_w=self.img_width)
-        return im, intrinsics
+        inputs['image'], inputs['cam'] = scale_randomly(inputs['image'], inputs['cam'])
+        inputs['image'], inputs['cam'] = crop_randomly(inputs['image'], inputs['cam'], out_h=self.img_height, out_w=self.img_width)
+        return inputs
     
 if __name__ == '__main__':
     dataloader = DataLoader(mode="train_dp", 

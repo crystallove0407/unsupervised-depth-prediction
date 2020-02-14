@@ -423,7 +423,7 @@ class Model(object):
                     self.tgt_image, [int(self.img_height/(2**s)), int(self.img_width/(2**s))], method=tf.image.ResizeMethod.BILINEAR)
                 self.scaled_src_images_stack[s] = tf.image.resize(
                     self.src_image_stack, [int(self.img_height/(2**s)), int(self.img_width/(2**s))], method=tf.image.ResizeMethod.BILINEAR)
-
+            
             selected_scale = 0 if self.is_depth_upsampling else s
             H = int(self.img_height / (2**selected_scale))
             W = int(self.img_width  / (2**selected_scale))
